@@ -1,8 +1,6 @@
-import itertools
 import threading
 
 RULE_TYPES = {"domain", "ip", "app"}
-_ids = itertools.count(1)
 
 
 class RuleEngine:
@@ -10,15 +8,17 @@ class RuleEngine:
         self.rules = []
         self._lock = threading.Lock()
 
-    def add(self, rtype, value):
+    def add(self, rtype, value, rule_id=None):
         rtype = rtype.lower()
         if rtype not in RULE_TYPES:
             raise ValueError(f"type must be one of {sorted(RULE_TYPES)}")
         value = value.strip().lower().rstrip(".")
         if not value:
             raise ValueError("value is empty")
-        rule = {"id": next(_ids), "type": rtype, "value": value, "action": "flag"}
         with self._lock:
+            if rule_id is None:
+                rule_id = max((r["id"] for r in self.rules), default=0) + 1
+            rule = {"id": rule_id, "type": rtype, "value": value, "action": "flag"}
             self.rules.append(rule)
         return rule
 
@@ -33,7 +33,6 @@ class RuleEngine:
             return list(self.rules)
 
     def match(self, flow):
-        """Return a description of the first matching rule, or ''."""
         name = (flow.sni or flow.http_host or "").lower()
         for r in self.list():
             v = r["value"]
@@ -46,7 +45,6 @@ class RuleEngine:
         return ""
 
     def evaluate(self, flow):
-        """Set flow.flagged / matched_rule. Returns True if flagged."""
         hit = self.match(flow)
         flow.flagged = bool(hit)
         flow.matched_rule = hit

@@ -5,22 +5,22 @@ import threading
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from scapy.all import AsyncSniffer
 
 from analyzer import TrafficAnalyzer
-from step6_live import pick_iface
-
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-
-from pydantic import BaseModel
+from db import Database, flow_id, flow_row
 from rules import RuleEngine
+from step6_live import pick_iface
 
 BPF = "tcp port 80 or tcp port 443"
 
 an = TrafficAnalyzer()
 rules = RuleEngine()
+db = Database()
+session_id = None
 lock = threading.Lock()
 q = queue.Queue(maxsize=20000)
 stop = threading.Event()
@@ -35,6 +35,14 @@ def enqueue(pkt):
         dropped[0] += 1
 
 
+def recheck_all():
+    """Re-evaluate every flow (call with `lock` held). Log newly flagged ones."""
+    for f in an.fm.flows.values():
+        was = f.flagged
+        if rules.evaluate(f) and not was:
+            db.add_alert(session_id, flow_id(f), f.matched_rule)
+
+
 def worker():
     while not stop.is_set():
         try:
@@ -44,18 +52,37 @@ def worker():
         with lock:
             flow = an.process(pkt)
             if flow is not None and not flow.flagged:
-                rules.evaluate(flow)
+                if rules.evaluate(flow):
+                    db.add_alert(session_id, flow_id(flow), flow.matched_rule)
+
+
+def save_now():
+    with lock:
+        rows = [flow_row(session_id, f) for f in an.fm.flows.values()]
+    db.save_flows(rows)
+
+
+def saver():
+    while not stop.wait(5):
+        save_now()
+
 
 @asynccontextmanager
 async def lifespan(app):
-    global sniffer
+    global sniffer, session_id
     iface = pick_iface(os.environ.get("IFACE"))
+    for r in db.load_rules():
+        rules.add(r["type"], r["value"], r["id"])
+    session_id = db.start_session(str(iface), BPF)
     threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=saver, daemon=True).start()
     sniffer = AsyncSniffer(iface=iface, filter=BPF, prn=enqueue, store=False)
     sniffer.start()
     yield
     stop.set()
     sniffer.stop()
+    save_now()
+    db.end_session(session_id)
 
 
 app = FastAPI(title="Traffic Analyzer", lifespan=lifespan)
@@ -63,7 +90,7 @@ app = FastAPI(title="Traffic Analyzer", lifespan=lifespan)
 
 def flow_dict(f):
     return {
-        "id": f"{f.protocol}-{f.client_ip}:{f.client_port}-{f.server_ip}:{f.server_port}",
+        "id": flow_id(f),
         "client": f"{f.client_ip}:{f.client_port}",
         "server": f"{f.server_ip}:{f.server_port}",
         "protocol": f.protocol,
@@ -114,39 +141,6 @@ def snapshot(limit=50, app_filter=None):
         }
     return {"stats": stats, "flows": top}
 
-class RuleIn(BaseModel):
-    type: str
-    value: str
-
-
-@app.get("/rules")
-def list_rules():
-    return rules.list()
-
-
-@app.post("/rules")
-def add_rule(r: RuleIn):
-    try:
-        rule = rules.add(r.type, r.value)
-    except ValueError as e:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail=str(e))
-    with lock:                       # re-check existing flows against the new rule
-        for f in an.fm.flows.values():
-            rules.evaluate(f)
-    return rule
-
-
-@app.delete("/rules/{rule_id}")
-def delete_rule(rule_id: int):
-    if not rules.remove(rule_id):
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="no such rule")
-    with lock:
-        for f in an.fm.flows.values():
-            rules.evaluate(f)
-    return {"deleted": rule_id}
-
 
 @app.get("/flows")
 def get_flows(limit: int = 50, app: str | None = None):
@@ -167,6 +161,55 @@ async def ws(websocket: WebSocket):
             await asyncio.sleep(1)
     except (WebSocketDisconnect, RuntimeError):
         pass
+
+
+class RuleIn(BaseModel):
+    type: str
+    value: str
+
+
+@app.get("/rules")
+def list_rules():
+    return rules.list()
+
+
+@app.post("/rules")
+def add_rule(r: RuleIn):
+    try:
+        rule = rules.add(r.type, r.value)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    db.save_rule(rule)
+    with lock:
+        recheck_all()
+    return rule
+
+
+@app.delete("/rules/{rule_id}")
+def delete_rule(rule_id: int):
+    if not rules.remove(rule_id):
+        raise HTTPException(status_code=404, detail="no such rule")
+    db.delete_rule(rule_id)
+    with lock:
+        recheck_all()
+    return {"deleted": rule_id}
+
+
+# ---- history (from the database) ----
+@app.get("/sessions")
+def get_sessions():
+    return db.sessions()
+
+
+@app.get("/sessions/{sid}/flows")
+def get_session_flows(sid: int, limit: int = 100):
+    return db.session_flows(sid, limit)
+
+
+@app.get("/alerts")
+def get_alerts(limit: int = 100):
+    return db.alerts(limit)
+
 
 @app.get("/")
 def index():

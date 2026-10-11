@@ -42,7 +42,9 @@
 <h1><span id="dot" class="dot"></span> Traffic Analyzer <span id="status" style="font-size:13px;color:var(--dim)">connecting…</span></h1>
 
 <div class="cards">
-  <div class="card"><div class="label">Flows</div><div class="value" id="c-flows">0</div></div>
+  <div class="card"><div class="label">Flows seen</div><div class="value" id="c-flows">0</div></div>
+  <div class="card"><div class="label">Active flows</div><div class="value" id="c-active">0</div></div>
+  <div class="card"><div class="label">Expired flows</div><div class="value" id="c-expired">0</div></div>
   <div class="card"><div class="label">Total traffic</div><div class="value" id="c-bytes">0 B</div></div>
   <div class="card"><div class="label">Queue</div><div class="value" id="c-queue">0</div></div>
   <div class="card"><div class="label">Dropped packets</div><div class="value" id="c-drop">0</div></div>
@@ -57,6 +59,7 @@
   <h2>Flag rules <span id="flagcount" style="color:#e5484d"></span></h2>
   <div class="rules">
     <select id="rtype"><option>domain</option><option>app</option><option>ip</option></select>
+    <select id="raction"><option value="flag">Flag</option><option value="block">Block</option></select>
     <input id="rvalue" placeholder="e.g. doubleclick.net" size="28">
     <button onclick="addRule()">Add rule</button>
   </div>
@@ -89,14 +92,14 @@ function fmt(n) {
 async function loadRules() {
   const rules = await (await fetch("/rules")).json();
   $("rulelist").innerHTML = rules.map(r =>
-    `<span class="chip">${esc(r.type)}: ${esc(r.value)}<b onclick="delRule(${r.id})">✕</b></span>`
+    `<span class="chip" style="${r.action==='block' ? 'background:#5c1a1a' : ''}">${r.action==='block' ? '🚫' : '🏳️'} ${esc(r.type)}: ${esc(r.value)}<b onclick="delRule(${r.id})">✕</b></span>`
   ).join("") || '<span style="color:var(--dim);font-size:12px">No rules yet</span>';
 }
 async function addRule() {
   const value = $("rvalue").value.trim();
   if (!value) return;
   const res = await fetch("/rules", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({type: $("rtype").value, value})});
+    body: JSON.stringify({type: $("rtype").value, value, action: $("raction").value})});
   if (!res.ok) { alert((await res.json()).detail); return; }
   $("rvalue").value = "";
   loadRules();
@@ -114,6 +117,8 @@ function connect() {
 function render({stats, flows}) {
   $("flagcount").textContent = stats.flagged_flows ? `(${stats.flagged_flows} flagged flows)` : "";
   $("c-flows").textContent = stats.total_flows;
+  $("c-active").textContent = stats.active_flows ?? stats.total_flows;
+  $("c-expired").textContent = stats.expired_flows ?? 0;
   $("c-bytes").textContent = fmt(stats.total_bytes);
   $("c-queue").textContent = stats.queue;
   $("c-drop").textContent = stats.dropped;

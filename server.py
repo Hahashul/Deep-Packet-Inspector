@@ -15,15 +15,18 @@ from db import Database, flow_id, flow_row
 from rules import RuleEngine
 from step6_live import pick_iface
 
+from enforce import block_ip, unblock_ip
+
 BPF = "tcp port 80 or tcp port 443"
 
-an = TrafficAnalyzer()
+an = TrafficAnalyzer(expire=True)
 rules = RuleEngine()
 db = Database()
 session_id = None
 lock = threading.Lock()
 q = queue.Queue(maxsize=20000)
 stop = threading.Event()
+blocked_ips = set()
 dropped = [0]
 sniffer = None
 
@@ -36,12 +39,23 @@ def enqueue(pkt):
 
 
 def recheck_all():
-    """Re-evaluate every flow (call with `lock` held). Log newly flagged ones."""
     for f in an.fm.flows.values():
         was = f.flagged
-        if rules.evaluate(f) and not was:
+        now = rules.evaluate(f)
+        if now and not was:
             db.add_alert(session_id, flow_id(f), f.matched_rule)
+        if now:
+            enforce_if_block(f)
 
+def enforce_if_block(flow):
+    rule_action = flow.matched_rule.split(":", 1)[0]
+    for r in rules.list():
+        hit = f"{r['type']}:{r['value']}"
+        if hit == flow.matched_rule and r["action"] == "block":
+            if flow.server_ip not in blocked_ips:
+                block_ip(flow.server_ip)
+                blocked_ips.add(flow.server_ip)
+            return
 
 def worker():
     while not stop.is_set():
@@ -54,7 +68,10 @@ def worker():
             if flow is not None and not flow.flagged:
                 if rules.evaluate(flow):
                     db.add_alert(session_id, flow_id(flow), flow.matched_rule)
-
+                    enforce_if_block(flow)
+            done = an.reap()
+        if done:
+            db.save_flows([flow_row(session_id, f) for f in done])
 
 def save_now():
     with lock:
@@ -72,7 +89,7 @@ async def lifespan(app):
     global sniffer, session_id
     iface = pick_iface(os.environ.get("IFACE"))
     for r in db.load_rules():
-        rules.add(r["type"], r["value"], r["id"])
+        rules.add(r["type"], r["value"], r["id"], r.get("action", "flag"))
     session_id = db.start_session(str(iface), BPF)
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=saver, daemon=True).start()
@@ -118,7 +135,10 @@ def snapshot(limit=50, app_filter=None):
         top = [flow_dict(f) for f in shown]
 
         apps = defaultdict(lambda: {"flows": 0, "bytes": 0})
-        domains = defaultdict(int)
+        for k, v in an.retired_apps.items():
+            apps[k]["flows"] += v["flows"]
+            apps[k]["bytes"] += v["bytes"]
+        domains = defaultdict(int, an.retired_domains)
         for f in flows:
             apps[f.app]["flows"] += 1
             apps[f.app]["bytes"] += f.total_bytes
@@ -127,8 +147,10 @@ def snapshot(limit=50, app_filter=None):
                 domains[name] += f.total_bytes
 
         stats = {
-            "total_flows": len(flows),
-            "total_bytes": sum(f.total_bytes for f in flows),
+            "active_flows": len(flows),
+            "expired_flows": an.retired_flows,
+            "total_flows": len(flows) + an.retired_flows,
+            "total_bytes": sum(f.total_bytes for f in flows) + an.retired_bytes,
             "queue": q.qsize(),
             "dropped": dropped[0],
             "flagged_flows": sum(1 for f in flows if f.flagged),
@@ -166,7 +188,8 @@ async def ws(websocket: WebSocket):
 class RuleIn(BaseModel):
     type: str
     value: str
-
+    action: str = "flag"
+    
 
 @app.get("/rules")
 def list_rules():
@@ -176,7 +199,7 @@ def list_rules():
 @app.post("/rules")
 def add_rule(r: RuleIn):
     try:
-        rule = rules.add(r.type, r.value)
+        rule = rules.add(r.type, r.value, action=r.action)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     db.save_rule(rule)
@@ -214,3 +237,8 @@ def get_alerts(limit: int = 100):
 @app.get("/")
 def index():
     return FileResponse("static/index.html")
+
+
+@app.get("/blocked")
+def get_blocked():
+    return sorted(blocked_ips)

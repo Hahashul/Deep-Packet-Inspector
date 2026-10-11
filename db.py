@@ -22,7 +22,10 @@ CREATE TABLE IF NOT EXISTS alerts (
 
 
 def flow_id(f):
-    return f"{f.protocol}-{f.client_ip}:{f.client_port}-{f.server_ip}:{f.server_port}"
+    # first_seen makes the id unique per connection, so a reused 5-tuple
+    # (after expiry / port reuse) gets its own row instead of overwriting
+    return (f"{f.protocol}-{f.client_ip}:{f.client_port}-"
+            f"{f.server_ip}:{f.server_port}-{int(f.first_seen * 1000)}")
 
 
 def flow_row(session_id, f):
@@ -73,8 +76,10 @@ class Database:
         self._run(
             "INSERT INTO flows VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(session_id, flow_id) DO UPDATE SET "
-            "last_seen=excluded.last_seen, bytes_sent=excluded.bytes_sent, "
-            "bytes_recv=excluded.bytes_recv, packet_count=excluded.packet_count, "
+            "last_seen=MAX(last_seen, excluded.last_seen), "
+            "bytes_sent=MAX(bytes_sent, excluded.bytes_sent), "
+            "bytes_recv=MAX(bytes_recv, excluded.bytes_recv), "
+            "packet_count=MAX(packet_count, excluded.packet_count), "
             "sni=excluded.sni, http_host=excluded.http_host, "
             "app_label=excluded.app_label, status=excluded.status",
             rows, many=True)
@@ -86,8 +91,8 @@ class Database:
 
     # rules
     def load_rules(self):
-        return self._query("SELECT rule_id AS id, type, value FROM rules ORDER BY rule_id")
-
+        return self._query("SELECT rule_id AS id, type, value, action FROM rules ORDER BY rule_id")
+    
     def save_rule(self, rule):
         self._run("INSERT OR REPLACE INTO rules VALUES (?,?,?,?,?)",
                   (rule["id"], rule["type"], rule["value"], rule["action"], time.time()))
@@ -101,4 +106,4 @@ class Database:
                   "VALUES (?,?,?,?)", (sid, fid, rule, time.time()))
 
     def alerts(self, limit=100):
-        return self._query("SELECT * FROM alerts ORDER BY alert_id DESC LIMIT ?", (limit,))     
+        return self._query("SELECT * FROM alerts ORDER BY alert_id DESC LIMIT ?", (limit,))

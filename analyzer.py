@@ -1,3 +1,4 @@
+from collections import defaultdict
 from scapy.all import TCP, IP, IPv6
 from step2_flows import FlowManager
 from step3_sni import parse_client_hello, parse_http_host
@@ -6,9 +7,33 @@ from classifier import classify
 
 
 class TrafficAnalyzer:
-    def __init__(self):
-        self.fm = FlowManager()
+    def __init__(self, expire=False):
+        self.fm = FlowManager(expire=expire)
         self.states = {}      # id(flow) -> Reassembler
+        # running totals for flows that have already expired
+        self.retired_flows = 0
+        self.retired_bytes = 0
+        self.retired_apps = defaultdict(lambda: {"flows": 0, "bytes": 0})
+        self.retired_domains = defaultdict(int)
+
+    def reap(self):
+        """Clean up expired flows, roll their totals into the retired counters,
+        and return them so the caller can persist them."""
+        done = self.fm.finished
+        if not done:
+            return []
+        self.fm.finished = []
+        for f in done:
+            self.states.pop(id(f), None)
+            self.retired_flows += 1
+            self.retired_bytes += f.total_bytes
+            a = self.retired_apps[f.app]
+            a["flows"] += 1
+            a["bytes"] += f.total_bytes
+            name = f.sni or f.http_host
+            if name:
+                self.retired_domains[name] += f.total_bytes
+        return done
 
     def process(self, pkt):
         flow = self.fm.process(pkt)

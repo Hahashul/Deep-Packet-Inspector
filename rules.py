@@ -8,17 +8,19 @@ class RuleEngine:
         self.rules = []
         self._lock = threading.Lock()
 
-    def add(self, rtype, value, rule_id=None):
+    def add(self, rtype, value, rule_id=None, action="flag"):
         rtype = rtype.lower()
         if rtype not in RULE_TYPES:
             raise ValueError(f"type must be one of {sorted(RULE_TYPES)}")
+        if action not in ("flag", "block"):
+            raise ValueError("action must be 'flag' or 'block'")
         value = value.strip().lower().rstrip(".")
         if not value:
             raise ValueError("value is empty")
         with self._lock:
             if rule_id is None:
                 rule_id = max((r["id"] for r in self.rules), default=0) + 1
-            rule = {"id": rule_id, "type": rtype, "value": value, "action": "flag"}
+            rule = {"id": rule_id, "type": rtype, "value": value, "action": action}
             self.rules.append(rule)
         return rule
 

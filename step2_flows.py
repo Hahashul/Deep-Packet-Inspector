@@ -4,6 +4,12 @@ from scapy.all import rdpcap, IP, IPv6, TCP, UDP
 
 WELL_KNOWN = {80, 443}
 
+# --- expiry tuning ---
+TCP_IDLE_TIMEOUT = 120   # seconds with no packets
+UDP_IDLE_TIMEOUT = 30
+CLOSED_GRACE = 10        # after RST / both FINs, keep briefly for trailing ACKs
+SWEEP_INTERVAL = 5       # seconds of *packet time* between sweeps
+
 @dataclass
 class Flow:
     client_ip: str
@@ -21,6 +27,9 @@ class Flow:
     app: str = "Unknown"
     flagged: bool = False
     matched_rule: str = ""
+    fin_client: bool = False
+    fin_server: bool = False
+    closed_at: float = 0.0
 
     
     def update(self, ts, size, from_client):
@@ -37,8 +46,12 @@ class Flow:
 
 
 class FlowManager:
-    def __init__(self):
+    def __init__(self, expire=False):
         self.flows = {}
+        self.expire = expire        # off by default so pcap/offline use is unchanged
+        self.finished = []          # evicted flows waiting to be reaped
+        self.clock = 0.0            # latest packet timestamp seen
+        self._last_sweep = 0.0
 
     def process(self, pkt):
         if IP in pkt:
@@ -58,10 +71,17 @@ class FlowManager:
         dst, dport = ip.dst, l4.dport
         ts = float(pkt.time)
         size = len(pkt)
+        self.clock = max(self.clock, ts)
 
         # Same key for both directions
         key = (proto, *sorted([(src, sport), (dst, dport)]))
         flow = self.flows.get(key)
+
+        # Port reuse: a fresh SYN on a closed flow starts a new connection
+        if (self.expire and flow is not None and flow.closed_at
+                and proto == "TCP" and (int(l4.flags) & 0x12) == 0x02):
+            self.finished.append(self.flows.pop(key))
+            flow = None
 
         if flow is None:
             src_is_server = sport in WELL_KNOWN and dport not in WELL_KNOWN
@@ -73,7 +93,34 @@ class FlowManager:
 
         from_client = (src, sport) == (flow.client_ip, flow.client_port)
         flow.update(ts, size, from_client)
+
+        if proto == "TCP":
+            flags = int(l4.flags)
+            if flags & 0x04:                      # RST closes immediately
+                flow.closed_at = ts
+            elif flags & 0x01:                    # FIN: closed once both sides sent one
+                if from_client:
+                    flow.fin_client = True
+                else:
+                    flow.fin_server = True
+                if flow.fin_client and flow.fin_server:
+                    flow.closed_at = ts
+
+        self._maybe_sweep()
         return flow
+
+    def _maybe_sweep(self):
+        if not self.expire or self.clock - self._last_sweep < SWEEP_INTERVAL:
+            return
+        self._last_sweep = self.clock
+        dead = []
+        for key, f in self.flows.items():
+            limit = TCP_IDLE_TIMEOUT if f.protocol == "TCP" else UDP_IDLE_TIMEOUT
+            if (self.clock - f.last_seen > limit
+                    or (f.closed_at and self.clock - f.closed_at > CLOSED_GRACE)):
+                dead.append(key)
+        for key in dead:
+            self.finished.append(self.flows.pop(key))
 
 
 def fmt_bytes(n):

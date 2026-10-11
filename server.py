@@ -146,6 +146,16 @@ async def lifespan(app):
 app = FastAPI(title="Traffic Analyzer", lifespan=lifespan)
 
 
+def matched_action(f):
+    """'block' / 'flag' for a flow that matches a rule, else ''."""
+    if not f.flagged:
+        return ""
+    for r in rules.list():
+        if f"{r['type']}:{r['value']}" == f.matched_rule:
+            return r["action"]
+    return "flag"
+
+
 def flow_dict(f):
     return {
         "id": flow_id(f),
@@ -163,6 +173,7 @@ def flow_dict(f):
         "last_seen": f.last_seen,
         "flagged": f.flagged,
         "matched_rule": f.matched_rule,
+        "action": matched_action(f),
     }
 
 
@@ -196,6 +207,11 @@ def snapshot(limit=50, app_filter=None):
             "queue": q.qsize(),
             "dropped": dropped[0],
             "flagged_flows": sum(1 for f in flows if f.flagged),
+            "blocked_flows": sum(1 for f in flows if matched_action(f) == "block"),
+            "bytes_up": sum(f.bytes_sent for f in flows) + an.retired_up,
+            "bytes_down": sum(f.bytes_recv for f in flows) + an.retired_down,
+            "rst_sent": reset.sent,
+            "firewall_blocks": len(blocked),
             "apps": sorted(
                 ({"app": k, **v} for k, v in apps.items()),
                 key=lambda a: a["bytes"], reverse=True),

@@ -16,6 +16,8 @@ class TrafficAnalyzer:
         # running totals for flows that have already expired
         self.retired_flows = 0
         self.retired_bytes = 0
+        self.retired_up = 0
+        self.retired_down = 0
         self.retired_apps = defaultdict(lambda: {"flows": 0, "bytes": 0})
         self.retired_domains = defaultdict(int)
 
@@ -30,6 +32,8 @@ class TrafficAnalyzer:
             self.states.pop(id(f), None)
             self.retired_flows += 1
             self.retired_bytes += f.total_bytes
+            self.retired_up += f.bytes_sent
+            self.retired_down += f.bytes_recv
             a = self.retired_apps[f.app]
             a["flows"] += 1
             a["bytes"] += f.total_bytes

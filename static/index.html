@@ -2,159 +2,464 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Traffic Analyzer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230F1B29'/%3E%3Cpath d='M3 16h8l3-8 4 16 3-8h8' fill='none' stroke='%233FD6C8' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#0f1218; --card:#181d27; --line:#262d3b; --text:#e4e8ef; --dim:#8b95a7; --accent:#4f9dff; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family: system-ui, Segoe UI, sans-serif; background:var(--bg); color:var(--text); padding:20px; }
-  h1 { font-size:20px; margin:0 0 16px; display:flex; align-items:center; gap:10px; }
-  .dot { width:10px; height:10px; border-radius:50%; background:#e5484d; }
-  .dot.live { background:#30a46c; }
-  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
-  .card .label { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
-  .card .value { font-size:24px; margin-top:4px; }
-  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
-  @media (max-width:800px) { .grid { grid-template-columns:1fr; } }
-  h2 { font-size:14px; margin:0 0 10px; color:var(--dim); font-weight:600; }
-  .bar-row { display:grid; grid-template-columns:150px 1fr 80px; gap:8px; align-items:center; margin:6px 0; font-size:13px; }
-  .bar { background:var(--line); border-radius:4px; height:10px; overflow:hidden; }
-  .bar > div { background:var(--accent); height:100%; }
-  .num { text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th { text-align:left; color:var(--dim); font-weight:600; padding:6px 8px; border-bottom:1px solid var(--line); }
-  td { padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:320px; }
-  td.r, th.r { text-align:right; font-variant-numeric:tabular-nums; }
-  .tag { background:var(--line); border-radius:4px; padding:2px 6px; font-size:12px; }
-  .filter { margin-bottom:10px; }
-  select { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:4px 8px; }
-  .scroll { overflow-x:auto; }
-    tr.flagged td { background:#3a1a1d; }
-  .flag { background:#e5484d; color:#fff; border-radius:4px; padding:2px 6px; font-size:11px; margin-left:6px; }
-  .rules { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
-  .rules input { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
-  .rules button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; }
-  .chip { background:var(--line); border-radius:12px; padding:3px 10px; font-size:12px; }
-  .chip b { cursor:pointer; margin-left:6px; color:#e5484d; }
+  :root {
+    --bg:#E9EDF1; --surface:#F7F9FB; --text:#101C2A; --muted:#566678; --line:#CBD4DD; --hover:#EDF1F5;
+    --down:#0B8A83; --up:#5A57D9; --cut:#D4264A; --flag:#9A6100; --flag-bg:#FBF1DC; --cut-bg:#FBE4E9;
+    --band:#0F1B29; --band-text:#E8EEF4; --band-muted:#8FA1B3; --band-line:#243548;
+    --down-b:#3FD6C8; --up-b:#9BA8FF; --cut-b:#FF5C7A;
+    --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+    --body:"Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0A121B; --surface:#101B27; --text:#E6ECF2; --muted:#92A2B3; --line:#223140; --hover:#15222F;
+      --down:#3FD6C8; --up:#9BA8FF; --cut:#FF5C7A; --flag:#F0B64A; --flag-bg:#2B2210; --cut-bg:#2E1520;
+      --band:#060C13; --band-line:#1B2A3A;
+    }
+  }
+  * { box-sizing:border-box; }
+  html { background:var(--bg); }
+  body { margin:0; font:14px/1.45 var(--body); color:var(--text); background:var(--bg); -webkit-font-smoothing:antialiased; }
+  button, input, select { font:inherit; color:inherit; }
+  :focus-visible { outline:2px solid var(--up); outline-offset:2px; border-radius:4px; }
+  .wrap { max-width:1280px; margin:0 auto; padding:0 24px; }
+  .num { font-variant-numeric:tabular-nums; }
+
+  /* ---------- band: the trace ---------- */
+  .band { background:var(--band); color:var(--band-text); border-bottom:1px solid var(--band-line); padding-bottom:14px; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; padding:16px 0 0; }
+  .brand { font:700 16px var(--display); letter-spacing:.01em; display:flex; align-items:center; gap:10px; }
+  .brand svg { width:22px; height:22px; }
+  .live { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--band-muted); }
+  .pulse { width:8px; height:8px; border-radius:50%; background:var(--cut-b); }
+  .live.on .pulse { background:var(--down-b); animation:pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow:0 0 0 5px rgba(63,214,200,.0); background:#7fe8de; } 0% { box-shadow:0 0 0 0 rgba(63,214,200,.45); } }
+
+  .hero { display:flex; align-items:flex-end; justify-content:space-between; gap:32px; flex-wrap:wrap; padding:22px 0 6px; }
+  .rate-main { font:700 clamp(40px,6vw,64px)/1 var(--display); letter-spacing:-.02em; }
+  .rate-main small { font:500 16px var(--body); color:var(--band-muted); letter-spacing:0; margin-left:8px; }
+  .rate-sub { color:var(--band-muted); margin-top:8px; }
+  .rate-sub b { color:var(--band-text); font-weight:600; }
+  .enforce { display:flex; gap:28px; margin:0; }
+  .enforce div { min-width:92px; }
+  .enforce dt { font-size:12.5px; color:var(--band-muted); }
+  .enforce dd { margin:2px 0 0; font:700 28px/1.1 var(--display); }
+  .enforce .cut dd { color:var(--cut-b); }
+  #trace { display:block; width:100%; height:190px; margin-top:6px; }
+  .legend { display:flex; gap:20px; flex-wrap:wrap; font-size:12.5px; color:var(--band-muted); margin-top:4px; }
+  .legend span { display:inline-flex; align-items:center; gap:7px; }
+  .legend i { width:12px; height:3px; border-radius:2px; display:inline-block; }
+
+  /* ---------- main ---------- */
+  main.wrap { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:40px; padding-top:28px; padding-bottom:40px; }
+  @media (max-width:980px) { main.wrap { grid-template-columns:1fr; gap:32px; } .enforce { gap:20px; } }
+  h2 { font:700 20px var(--display); margin:0; letter-spacing:-.005em; }
+  .sub { color:var(--muted); font-size:13px; margin-top:2px; }
+
+  .tools { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:16px 0 8px; }
+  .search { flex:1 1 220px; min-width:180px; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
+  .search::placeholder { color:var(--muted); }
+  .seg { display:inline-flex; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:2px; }
+  .seg label { position:relative; }
+  .seg input { position:absolute; opacity:0; inset:0; cursor:pointer; }
+  .seg span { display:block; padding:5px 11px; border-radius:6px; cursor:pointer; color:var(--muted); }
+  .seg input:checked + span { background:var(--text); color:var(--surface); }
+  .seg input:focus-visible + span { outline:2px solid var(--up); outline-offset:2px; }
+  select.pick { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
+
+  .ledger { width:100%; border-collapse:collapse; }
+  .ledger th { text-align:left; font-weight:500; font-size:12.5px; color:var(--muted); padding:8px 10px; border-bottom:1px solid var(--line); }
+  .ledger td { padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  .ledger th.r, .ledger td.r { text-align:right; white-space:nowrap; }
+  .ledger tbody tr:hover { background:var(--hover); }
+  .ledger td:first-child { box-shadow:inset 3px 0 0 var(--down); padding-left:14px; max-width:0; width:100%; }
+  .ledger tr.flag td:first-child { box-shadow:inset 3px 0 0 var(--flag); }
+  .ledger tr.block td:first-child { box-shadow:inset 3px 0 0 var(--cut); }
+  .ledger tr.just-cut td { animation:cutflash 1.4s ease-out; }
+  @keyframes cutflash { from { background:var(--cut-bg); } to { background:transparent; } }
+  .nm { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .nm.dim { font-weight:400; color:var(--muted); }
+  .meta { display:flex; align-items:center; gap:8px; margin-top:3px; font-size:12.5px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+  .pill { background:var(--hover); border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:12px; color:var(--text); }
+  .proto { font-size:12px; font-weight:600; color:var(--muted); }
+  .proto.quic { color:var(--up); }
+  .wire { width:150px; height:8px; border-radius:4px; background:var(--line); position:relative; overflow:visible; }
+  .wire .fill { position:absolute; inset:0 auto 0 0; display:flex; border-radius:4px; overflow:hidden; }
+  .wire .d { background:var(--down); } .wire .u { background:var(--up); }
+  tr.block .wire .fill { opacity:.4; }
+  tr.block .wire::after { content:""; position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--cut); left:var(--end, 50%); border-radius:1px; }
+  .state { text-align:right; white-space:nowrap; width:1%; }
+  .badge { font-size:12px; font-weight:600; padding:2px 8px; border-radius:6px; }
+  .badge.flag { color:var(--flag); background:var(--flag-bg); }
+  .badge.block { color:var(--cut); background:var(--cut-bg); }
+  .acts { display:inline-flex; gap:6px; opacity:0; transition:opacity .12s; }
+  tr:hover .acts, tr:focus-within .acts { opacity:1; }
+  @media (hover:none) { .acts { opacity:1; } }
+  .btn { background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:3px 10px; cursor:pointer; font-size:12.5px; font-weight:500; }
+  .btn:hover { border-color:var(--muted); }
+  .btn.danger:hover { border-color:var(--cut); color:var(--cut); }
+  .empty { padding:36px 10px; color:var(--muted); }
+  .empty b { color:var(--text); display:block; margin-bottom:2px; }
+  @media (max-width:640px) { .acts .btn:first-child { display:none; } .wire, .col-wire, .col-up, .addr { display:none; } .wrap { padding:0 16px; } }
+
+  /* ---------- rail ---------- */
+  .rail section { padding-bottom:28px; margin-bottom:28px; border-bottom:1px solid var(--line); }
+  .rail section:last-child { border-bottom:0; margin-bottom:0; }
+  .rule-form { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:14px 0 4px; }
+  .rule-form input[type=text], .rule-form select { width:100%; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  .rule-form .full { grid-column:1 / -1; }
+  .go { background:var(--text); color:var(--surface); border:0; border-radius:8px; padding:9px 12px; font-weight:600; cursor:pointer; }
+  .go:hover { opacity:.9; }
+  .rules { list-style:none; margin:14px 0 0; padding:0; }
+  .rules li { display:flex; align-items:center; gap:10px; padding:8px 0; border-top:1px solid var(--line); }
+  .rules .v { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+  .rules .t { color:var(--muted); font-size:12.5px; }
+  .x { background:none; border:0; cursor:pointer; color:var(--muted); font-size:18px; line-height:1; padding:2px 6px; border-radius:6px; }
+  .x:hover { color:var(--cut); background:var(--cut-bg); }
+  .bars { margin-top:12px; display:grid; gap:10px; }
+  .bar-row .top { display:flex; justify-content:space-between; gap:12px; font-size:13px; }
+  .bar-row .top span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bar-row .top span:last-child { color:var(--muted); }
+  .bar { height:5px; background:var(--line); border-radius:3px; margin-top:4px; overflow:hidden; }
+  .bar div { height:100%; background:var(--down); border-radius:3px; transition:width .4s; }
+  .domains .bar div { background:var(--up); }
+  footer { color:var(--muted); font-size:12.5px; padding:0 0 28px; }
+
+  #toast { position:fixed; left:50%; bottom:22px; transform:translate(-50%, 20px); background:var(--text); color:var(--surface); padding:10px 16px; border-radius:10px; opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; max-width:90vw; }
+  #toast.show { opacity:1; transform:translate(-50%,0); }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation:none !important; transition:none !important; } }
 </style>
 </head>
 <body>
-<h1><span id="dot" class="dot"></span> Traffic Analyzer <span id="status" style="font-size:13px;color:var(--dim)">connecting…</span></h1>
 
-<div class="cards">
-  <div class="card"><div class="label">Flows seen</div><div class="value" id="c-flows">0</div></div>
-  <div class="card"><div class="label">Active flows</div><div class="value" id="c-active">0</div></div>
-  <div class="card"><div class="label">Expired flows</div><div class="value" id="c-expired">0</div></div>
-  <div class="card"><div class="label">Total traffic</div><div class="value" id="c-bytes">0 B</div></div>
-  <div class="card"><div class="label">Queue</div><div class="value" id="c-queue">0</div></div>
-  <div class="card"><div class="label">Dropped packets</div><div class="value" id="c-drop">0</div></div>
-</div>
+<header class="band">
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 16h8l3-8 4 16 3-8h8" fill="none" stroke="#3FD6C8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Traffic Analyzer
+      </div>
+      <div class="live" id="live" role="status"><span class="pulse"></span><span id="status">Connecting</span></div>
+    </div>
 
-<div class="grid">
-  <div class="card"><h2>Apps</h2><div id="apps"></div></div>
-  <div class="card"><h2>Top domains</h2><div id="domains"></div></div>
-</div>
+    <div class="hero">
+      <div>
+        <div class="rate-main num"><span id="rate-down">0 B</span><small>/s down</small></div>
+        <div class="rate-sub num"><b id="rate-up">0 B</b>/s up</div>
+      </div>
+      <dl class="enforce">
+        <div class="cut"><dt>Resets sent</dt><dd class="num" id="e-rst">0</dd></div>
+        <div><dt>Firewall blocks</dt><dd class="num" id="e-fw">0</dd></div>
+        <div><dt>Blocked connections</dt><dd class="num" id="e-blocked">0</dd></div>
+      </dl>
+    </div>
 
-<div class="card" style="margin-bottom:16px">
-  <h2>Flag rules <span id="flagcount" style="color:#e5484d"></span></h2>
-  <div class="rules">
-    <select id="rtype"><option>domain</option><option>app</option><option>ip</option></select>
-    <select id="raction"><option value="flag">Flag</option><option value="block">Block</option></select>
-    <input id="rvalue" placeholder="e.g. doubleclick.net" size="28">
-    <button onclick="addRule()">Add rule</button>
+    <svg id="trace" viewBox="0 0 1000 190" preserveAspectRatio="none" role="img" aria-label="Network throughput over the last 90 seconds"></svg>
+    <div class="legend">
+      <span><i style="background:var(--down-b)"></i>Download</span>
+      <span><i style="background:var(--up-b)"></i>Upload</span>
+      <span><i style="background:var(--cut-b);width:2px;height:12px"></i>Connection cut</span>
+      <span id="peak" class="num" style="margin-left:auto"></span>
+    </div>
   </div>
-  <div class="rules" id="rulelist"></div>
-</div>
+</header>
 
-<div class="card">
-  <h2>Live flows</h2>
-  <div class="filter">App: <select id="filter"><option value="">All</option></select></div>
-  <div class="scroll">
-  <table>
-    <thead><tr><th>App</th><th>Name</th><th>Server</th><th class="r">Up</th><th class="r">Down</th><th class="r">Pkts</th></tr></thead>
-    <tbody id="rows"></tbody>
-  </table>
+<main class="wrap">
+  <div>
+    <h2>Connections</h2>
+    <div class="sub num" id="ledger-sub">Waiting for traffic</div>
+
+    <div class="tools">
+      <input class="search" id="q" type="search" placeholder="Search by name, app or address" aria-label="Search connections">
+      <div class="seg" role="radiogroup" aria-label="Show">
+        <label><input type="radio" name="show" value="" checked><span>All</span></label>
+        <label><input type="radio" name="show" value="flag"><span>Flagged</span></label>
+        <label><input type="radio" name="show" value="block"><span>Blocked</span></label>
+      </div>
+      <select class="pick" id="sort" aria-label="Sort by">
+        <option value="traffic">Most traffic</option>
+        <option value="new">Newest</option>
+      </select>
+    </div>
+
+    <div style="overflow-x:auto">
+      <table class="ledger">
+        <thead><tr>
+          <th>Connection</th><th class="col-wire">Traffic</th>
+          <th class="r">Down</th><th class="r col-up">Up</th><th></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="empty" hidden></div>
   </div>
-</div>
+
+  <aside class="rail">
+    <section>
+      <h2>Rules</h2>
+      <div class="sub">Flag a connection to track it, or block it to cut it.</div>
+      <form class="rule-form" id="rule-form">
+        <select id="rtype" aria-label="Rule type">
+          <option value="domain">Domain</option><option value="app">App</option><option value="ip">IP address</option>
+        </select>
+        <div class="seg" role="radiogroup" aria-label="Action" style="justify-self:stretch">
+          <label style="flex:1"><input type="radio" name="ract" value="flag" checked><span style="text-align:center">Flag</span></label>
+          <label style="flex:1"><input type="radio" name="ract" value="block"><span style="text-align:center">Block</span></label>
+        </div>
+        <input class="full" type="text" id="rvalue" list="suggest" placeholder="reddit.com" autocomplete="off" aria-label="Rule value">
+        <datalist id="suggest"></datalist>
+        <button class="go full" type="submit">Add rule</button>
+      </form>
+      <ul class="rules" id="rulelist"></ul>
+    </section>
+
+    <section>
+      <h2>Apps</h2>
+      <div class="bars" id="apps"></div>
+    </section>
+
+    <section class="domains">
+      <h2>Top domains</h2>
+      <div class="bars" id="domains"></div>
+    </section>
+  </aside>
+</main>
+
+<footer class="wrap num" id="health"></footer>
+<div id="toast" role="status" aria-live="polite"></div>
 
 <script>
 const $ = id => document.getElementById(id);
-const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function fmt(n) {
   for (const u of ["B","KB","MB","GB"]) {
-    if (n < 1024) return (u === "B" ? Math.round(n) : n.toFixed(1)) + " " + u;
+    if (n < 1024) return (u === "B" ? Math.round(n) : n.toFixed(n < 10 ? 2 : 1)) + " " + u;
     n /= 1024;
   }
   return n.toFixed(1) + " TB";
 }
+let toastTimer;
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+}
 
+/* ---------- rules ---------- */
+let rules = [];
 async function loadRules() {
-  const rules = await (await fetch("/rules")).json();
-  $("rulelist").innerHTML = rules.map(r =>
-    `<span class="chip" style="${r.action==='block' ? 'background:#5c1a1a' : ''}">${r.action==='block' ? '🚫' : '🏳️'} ${esc(r.type)}: ${esc(r.value)}<b onclick="delRule(${r.id})">✕</b></span>`
-  ).join("") || '<span style="color:var(--dim);font-size:12px">No rules yet</span>';
+  rules = await (await fetch("/rules")).json();
+  const ul = $("rulelist");
+  ul.innerHTML = rules.length ? rules.map(r =>
+    `<li><span class="badge ${r.action}">${r.action === "block" ? "Block" : "Flag"}</span>
+       <span class="v" title="${esc(r.value)}">${esc(r.value)}</span><span class="t">${r.type === "ip" ? "IP" : esc(r.type)}</span>
+       <button class="x" data-del="${r.id}" aria-label="Remove rule for ${esc(r.value)}">&times;</button></li>`).join("")
+    : `<li class="empty" style="padding:14px 0 0;border:0">No rules yet. Add a domain, app or IP above, or use Block on any connection.</li>`;
 }
-async function addRule() {
-  const value = $("rvalue").value.trim();
-  if (!value) return;
+async function createRule(type, value, action) {
   const res = await fetch("/rules", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({type: $("rtype").value, value, action: $("raction").value})});
-  if (!res.ok) { alert((await res.json()).detail); return; }
-  $("rvalue").value = "";
+    body: JSON.stringify({type, value, action})});
+  if (!res.ok) { toast((await res.json()).detail || "Could not add the rule"); return false; }
+  toast(`${action === "block" ? "Block" : "Flag"} rule added for ${value}`);
   loadRules();
+  return true;
 }
-async function delRule(id) { await fetch("/rules/" + id, {method:"DELETE"}); loadRules(); }
+$("rule-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const value = $("rvalue").value.trim();
+  if (!value) { $("rvalue").focus(); return; }
+  const action = document.querySelector('input[name=ract]:checked').value;
+  if (await createRule($("rtype").value, value, action)) $("rvalue").value = "";
+});
+$("rulelist").addEventListener("click", async e => {
+  const id = e.target.closest("[data-del]")?.dataset.del;
+  if (!id) return;
+  await fetch("/rules/" + id, {method:"DELETE"});
+  toast("Rule removed");
+  loadRules();
+});
 loadRules();
 
+/* ---------- connection ---------- */
 function connect() {
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onopen = () => { $("dot").className = "dot live"; $("status").textContent = "live"; };
-  ws.onclose = () => { $("dot").className = "dot"; $("status").textContent = "disconnected, retrying…"; setTimeout(connect, 2000); };
+  ws.onopen = () => { $("live").classList.add("on"); $("status").textContent = "Live"; };
+  ws.onclose = () => { $("live").classList.remove("on"); $("status").textContent = "Reconnecting"; setTimeout(connect, 2000); };
   ws.onmessage = e => render(JSON.parse(e.data));
 }
 
-function render({stats, flows}) {
-  $("flagcount").textContent = stats.flagged_flows ? `(${stats.flagged_flows} flagged flows)` : "";
-  $("c-flows").textContent = stats.total_flows;
-  $("c-active").textContent = stats.active_flows ?? stats.total_flows;
-  $("c-expired").textContent = stats.expired_flows ?? 0;
-  $("c-bytes").textContent = fmt(stats.total_bytes);
-  $("c-queue").textContent = stats.queue;
-  $("c-drop").textContent = stats.dropped;
-
-  const maxApp = Math.max(1, ...stats.apps.map(a => a.bytes));
-  $("apps").innerHTML = stats.apps.slice(0, 10).map(a =>
-    `<div class="bar-row"><span>${esc(a.app)}</span>
-     <div class="bar"><div style="width:${a.bytes / maxApp * 100}%"></div></div>
-     <span class="num">${fmt(a.bytes)}</span></div>`).join("");
-
-  const maxDom = Math.max(1, ...stats.top_domains.map(d => d.bytes));
-  $("domains").innerHTML = stats.top_domains.map(d =>
-    `<div class="bar-row"><span title="${esc(d.domain)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.domain)}</span>
-     <div class="bar"><div style="width:${d.bytes / maxDom * 100}%"></div></div>
-     <span class="num">${fmt(d.bytes)}</span></div>`).join("");
-
-  // keep the dropdown in sync with the apps seen so far
-  const sel = $("filter"), current = sel.value;
-  const names = stats.apps.map(a => a.app);
-  if (names.join() !== [...sel.options].slice(1).map(o => o.value).join()) {
-    sel.innerHTML = '<option value="">All</option>' +
-      names.map(n => `<option>${esc(n)}</option>`).join("");
-    sel.value = current;
+/* ---------- trace ---------- */
+const WIN = 90, samples = [];
+let prev = null;
+function sample(st) {
+  const now = performance.now();
+  if (prev) {
+    const dt = Math.max(0.5, (now - prev.t) / 1000);
+    samples.push({
+      down: Math.max(0, (st.bytes_down - prev.down) / dt),
+      up: Math.max(0, (st.bytes_up - prev.up) / dt),
+      cut: st.rst_sent > prev.rst,
+    });
+    if (samples.length > WIN) samples.shift();
   }
-
-  const want = sel.value;
-  const shown = want ? flows.filter(f => f.app === want) : flows;
-  $("rows").innerHTML = shown.slice(0, 40).map(f =>
-    `<tr class="${f.flagged ? "flagged" : ""}"><td><span class="tag">${esc(f.app)}</span>${f.flagged ? `<span class="flag" title="${esc(f.matched_rule)}">FLAGGED</span>` : ""}</td>
-     <td title="${esc(f.name || f.dns_name)}">${f.name ? esc(f.name)
-        : f.dns_name ? `<span style="color:var(--dim)" title="guessed from DNS, not confirmed">${esc(f.dns_name)} <i>(DNS)</i></span>` : "-"}</td>
-     <td>${esc(f.server)}</td>
-     <td class="r">${fmt(f.bytes_sent)}</td><td class="r">${fmt(f.bytes_recv)}</td>
-     <td class="r">${f.packets}</td></tr>`).join("");
+  prev = {t: now, down: st.bytes_down, up: st.bytes_up, rst: st.rst_sent};
+}
+function drawTrace() {
+  const W = 1000, H = 190, mid = H / 2, amp = 82;
+  const peak = Math.max(20 * 1024, ...samples.map(s => Math.max(s.down, s.up)));
+  const x = i => ((WIN - samples.length + i) / (WIN - 1)) * W;
+  const area = (key, sign) => {
+    if (!samples.length) return "";
+    let d = `M${x(0)},${mid}`;
+    samples.forEach((s, i) => d += ` L${x(i)},${mid + sign * (s[key] / peak) * amp}`);
+    return d + ` L${x(samples.length - 1)},${mid} Z`;
+  };
+  const cuts = samples.map((s, i) => s.cut
+    ? `<line x1="${x(i)}" x2="${x(i)}" y1="${mid - 26}" y2="${mid + 26}" stroke="var(--cut-b)" stroke-width="2" vector-effect="non-scaling-stroke"/>` : "").join("");
+  $("trace").innerHTML =
+    `<line x1="0" x2="${W}" y1="${mid}" y2="${mid}" stroke="#243548" stroke-width="1" vector-effect="non-scaling-stroke"/>
+     <path d="${area("down", -1)}" fill="var(--down-b)" fill-opacity=".28" stroke="var(--down-b)" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+     <path d="${area("up", 1)}" fill="var(--up-b)" fill-opacity=".28" stroke="var(--up-b)" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>${cuts}`;
+  $("peak").textContent = samples.length ? `Scale up to ${fmt(peak)}/s` : "";
 }
 
+/* ---------- ledger ---------- */
+const state = { q: "", show: "", sort: "traffic", hover: false };
+const rowEls = new Map();
+const tbody = $("rows");
+$("q").addEventListener("input", e => { state.q = e.target.value.trim().toLowerCase(); redraw(); });
+$("sort").addEventListener("change", e => { state.sort = e.target.value; redraw(); });
+document.querySelectorAll("input[name=show]").forEach(r => r.addEventListener("change", e => { state.show = e.target.value; redraw(); }));
+tbody.addEventListener("mouseenter", () => state.hover = true);
+tbody.addEventListener("mouseleave", () => state.hover = false);
+tbody.addEventListener("click", e => {
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  const f = lastFlows.find(x => x.id === b.closest("tr").dataset.id);
+  if (!f) return;
+  const [type, value] = f.name ? ["domain", f.name] : ["ip", f.server.replace(/:\d+$/, "")];
+  createRule(type, value, b.dataset.act);
+});
+
+function makeRow() {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td><div class="nm"></div><div class="meta"><span class="pill"></span><span class="proto"></span><span class="addr num"></span></div></td>
+    <td class="col-wire"><div class="wire"><div class="fill"><div class="d"></div><div class="u"></div></div></div></td>
+    <td class="r num dn"></td><td class="r num up col-up"></td><td class="state"></td>`;
+  return tr;
+}
+function updateRow(tr, f, maxB) {
+  const q = f.protocol === "UDP" && f.server.endsWith(":443");
+  const name = f.name || f.dns_name;
+  const nm = tr.querySelector(".nm");
+  nm.textContent = name ? name + (f.name ? "" : " (from DNS)") : "Unnamed connection";
+  nm.className = "nm" + (f.name ? "" : " dim");
+  nm.title = name || "";
+  tr.querySelector(".pill").textContent = f.app;
+  const pr = tr.querySelector(".proto");
+  pr.textContent = q ? "QUIC" : f.protocol; pr.className = "proto" + (q ? " quic" : "");
+  tr.querySelector(".addr").textContent = f.server;
+  const share = Math.sqrt(f.total_bytes / maxB);          // sqrt keeps small flows visible without flattening the big ones
+  const fill = tr.querySelector(".fill"), tot = Math.max(1, f.bytes_sent + f.bytes_recv);
+  fill.style.width = (share * 100).toFixed(1) + "%";
+  tr.querySelector(".d").style.width = (f.bytes_recv / tot * 100) + "%";
+  tr.querySelector(".u").style.width = (f.bytes_sent / tot * 100) + "%";
+  tr.querySelector(".wire").style.setProperty("--end", (share * 100).toFixed(1) + "%");
+  tr.querySelector(".dn").textContent = fmt(f.bytes_recv);
+  tr.querySelector(".up").textContent = fmt(f.bytes_sent);
+  const was = tr.dataset.action || "";
+  tr.dataset.action = f.action;
+  tr.className = f.action === "block" ? "block" : f.action === "flag" ? "flag" : "";
+  if (f.action === "block" && was !== "block" && tr.dataset.seen) tr.classList.add("just-cut");
+  tr.dataset.seen = "1";
+  const st = tr.querySelector(".state");
+  const badge = f.action ? `<span class="badge ${f.action}" title="${esc(f.matched_rule)}">${f.action === "block" ? "Blocked" : "Flagged"}</span>` : "";
+  const acts = f.action === "block" ? "" :
+    `<span class="acts"><button class="btn" data-act="flag">Flag</button><button class="btn danger" data-act="block">Block</button></span>`;
+  const html = badge + acts;
+  if (st.dataset.h !== html) { st.innerHTML = html; st.dataset.h = html; }
+}
+
+let lastFlows = [], lastStats = null;
+function redraw() { if (lastStats) renderLedger(lastFlows, lastStats); }
+
+function renderLedger(flows, st) {
+  let list = flows.filter(f => (!state.show || f.action === state.show) &&
+    (!state.q || `${f.name} ${f.dns_name} ${f.app} ${f.server}`.toLowerCase().includes(state.q)));
+  list.sort(state.sort === "new" ? (a, b) => b.first_seen - a.first_seen : (a, b) => b.total_bytes - a.total_bytes);
+  list = list.slice(0, 60);
+  const maxB = Math.max(1, ...list.map(f => f.total_bytes));
+  const seen = new Set();
+  let prevEl = null;
+  for (const f of list) {
+    let tr = rowEls.get(f.id);
+    if (!tr) { tr = makeRow(); tr.dataset.id = f.id; rowEls.set(f.id, tr); }
+    updateRow(tr, f, maxB);
+    seen.add(f.id);
+    if (!state.hover || !tr.isConnected) {          // hold the order while the pointer is on the table
+      const ref = prevEl ? prevEl.nextSibling : tbody.firstChild;
+      if (ref !== tr) tbody.insertBefore(tr, ref);
+    }
+    prevEl = tr;
+  }
+  for (const [id, tr] of rowEls) if (!seen.has(id)) { tr.remove(); rowEls.delete(id); }
+
+  const empty = $("empty");
+  empty.hidden = list.length > 0;
+  if (!list.length) {
+    empty.innerHTML = flows.length
+      ? "<b>Nothing matches.</b>Clear the search or switch back to All."
+      : "<b>No connections yet.</b>Open a website or app and traffic will appear here.";
+  }
+  $("ledger-sub").textContent = `${st.active_flows} active, ${st.total_flows} seen this session, ${fmt(st.total_bytes)} in total`;
+}
+
+/* ---------- rail ---------- */
+function bars(el, rows, key, label) {
+  const max = Math.max(1, ...rows.map(r => r.bytes));
+  el.innerHTML = rows.length ? rows.map(r =>
+    `<div class="bar-row"><div class="top"><span title="${esc(r[key])}">${esc(r[key])}</span><span class="num">${fmt(r.bytes)}</span></div>
+     <div class="bar"><div style="width:${(r.bytes / max * 100).toFixed(1)}%"></div></div></div>`).join("")
+    : `<div class="sub">${label}</div>`;
+}
+
+let flowsSeen = false;
+function render({stats, flows}) {
+  lastFlows = flows; lastStats = stats;
+  sample(stats); drawTrace();
+  const recent = samples.slice(-3);
+  const avg = k => recent.length ? recent.reduce((a, s) => a + s[k], 0) / recent.length : 0;
+  $("rate-down").textContent = fmt(avg("down"));
+  $("rate-up").textContent = fmt(avg("up"));
+  $("e-rst").textContent = stats.rst_sent ?? 0;
+  $("e-fw").textContent = stats.firewall_blocks ?? 0;
+  $("e-blocked").textContent = stats.blocked_flows ?? 0;
+  renderLedger(flows, stats);
+  bars($("apps"), stats.apps.slice(0, 8), "app", "No apps identified yet.");
+  bars($("domains"), stats.top_domains.slice(0, 8), "domain", "No domains seen yet.");
+  $("health").textContent = `Capture queue ${stats.queue}, dropped packets ${stats.dropped}`;
+
+  // suggestions for the rule form
+  const type = $("rtype").value;
+  const opts = type === "app" ? stats.apps.map(a => a.app) : type === "domain" ? stats.top_domains.map(d => d.domain) : [];
+  const key = type + opts.join();
+  if ($("suggest").dataset.k !== key) {
+    $("suggest").innerHTML = opts.map(o => `<option value="${esc(o)}">`).join("");
+    $("suggest").dataset.k = key;
+  }
+}
+$("rtype").addEventListener("change", () => {
+  $("rvalue").placeholder = {domain:"reddit.com", app:"YouTube", ip:"203.0.113.7"}[$("rtype").value];
+  $("suggest").dataset.k = ""; if (lastStats) render({stats:lastStats, flows:lastFlows});
+});
+
+drawTrace();
 connect();
 </script>
 </body>

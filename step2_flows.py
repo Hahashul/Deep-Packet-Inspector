@@ -37,6 +37,7 @@ class Flow:
     rst_seq: int = -1
     l2_src: str = ""        # our MAC / next-hop MAC, copied from a client packet
     l2_dst: str = ""
+    midstream: bool = False  # TCP flow first seen without its SYN (opened before capture): no ClientHello, so no name
 
     
     def update(self, ts, size, from_client):
@@ -97,6 +98,7 @@ class FlowManager:
             else:
                 flow = Flow(src, sport, dst, dport, proto, ts, ts)
             self.flows[key] = flow
+            flow.midstream = proto == "TCP" and not int(l4.flags) & 0x02
 
         from_client = (src, sport) == (flow.client_ip, flow.client_port)
         flow.update(ts, size, from_client)

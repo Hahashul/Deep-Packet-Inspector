@@ -15,7 +15,8 @@ from db import Database, flow_id, flow_row
 from rules import RuleEngine
 from step6_live import pick_iface
 
-from enforce import block_ip, unblock_ip, block_udp443, unblock_udp443, cleanup_stale
+from enforce import (block_ip, unblock_ip, block_udp443, unblock_udp443,
+                     block_udp443_all, unblock_udp443_all, cleanup_stale)
 import reset
 import traceback
 
@@ -33,6 +34,13 @@ stop = threading.Event()
 blocked = {}          # ip -> rule key ('type:value') that caused the block
 dropped = [0]
 sniffer = None
+iface = None
+capturing = False   # True while the sniffer is running
+ctl = threading.Lock()   # serialises start/stop requests
+# QUIC shield: while a domain/app block rule exists, firewall-block all UDP/443 so browsers use TCP.
+# Set QUIC_SHIELD=0 to disable (e.g. if you rely on a VPN that runs over UDP/443).
+QUIC_SHIELD = os.environ.get("QUIC_SHIELD", "1") != "0"
+shield = [False]
 
 
 def enqueue(pkt):
@@ -51,6 +59,19 @@ def recheck_all():
         if now:
             enforce_if_block(f)
     sync_blocks()
+    sync_shield()
+
+
+def sync_shield():
+    """Engage/release the QUIC shield. Releasing is always allowed; engaging only while capturing."""
+    need = QUIC_SHIELD and any(r["action"] == "block" and r["type"] in ("domain", "app")
+                              for r in rules.list())
+    if shield[0] and not need:
+        unblock_udp443_all()
+        shield[0] = False
+    elif need and not shield[0] and capturing:
+        shield[0] = bool(block_udp443_all())
+
 
 def block_rule(flow):
     for r in rules.list():
@@ -59,7 +80,10 @@ def block_rule(flow):
 
 
 def enforce_if_block(flow):
-    """ip rules -> firewall; domain/app rules -> TCP RST on this connection."""
+    """ip rules -> firewall; domain/app rules -> TCP RST on this connection.
+    Paused while capture is stopped (existing firewall blocks stay in place)."""
+    if not capturing:
+        return
     r = block_rule(flow)
     if not r:
         return
@@ -119,9 +143,26 @@ def saver():
         save_now()
 
 
+def start_sniffer():
+    global sniffer, capturing
+    sniffer = AsyncSniffer(iface=iface, filter=BPF, prn=enqueue, store=False)
+    sniffer.start()
+    capturing = True
+
+
+def stop_sniffer():
+    global capturing
+    capturing = False                     # first, so no new enforcement starts
+    try:
+        if sniffer is not None:
+            sniffer.stop()
+    except Exception:
+        traceback.print_exc()
+
+
 @asynccontextmanager
 async def lifespan(app):
-    global sniffer, session_id
+    global iface, session_id
     iface = pick_iface(os.environ.get("IFACE"))
     for r in db.load_rules():
         rules.add(r["type"], r["value"], r["id"], r.get("action", "flag"))
@@ -130,15 +171,17 @@ async def lifespan(app):
     session_id = db.start_session(str(iface), BPF)
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=saver, daemon=True).start()
-    sniffer = AsyncSniffer(iface=iface, filter=BPF, prn=enqueue, store=False)
-    sniffer.start()
+    start_sniffer()
     yield
     stop.set()
-    sniffer.stop()
+    stop_sniffer()
     with lock:
         for key in list(blocked):
             unblock_udp443(key[4:]) if key.startswith("udp:") else unblock_ip(key)
         blocked.clear()
+        if shield[0]:
+            unblock_udp443_all()
+            shield[0] = False
     save_now()
     db.end_session(session_id)
 
@@ -171,6 +214,7 @@ def flow_dict(f):
         "packets": f.packets,
         "first_seen": f.first_seen,
         "last_seen": f.last_seen,
+        "midstream": f.midstream,
         "flagged": f.flagged,
         "matched_rule": f.matched_rule,
         "action": matched_action(f),
@@ -210,8 +254,11 @@ def snapshot(limit=50, app_filter=None):
             "blocked_flows": sum(1 for f in flows if matched_action(f) == "block"),
             "bytes_up": sum(f.bytes_sent for f in flows) + an.retired_up,
             "bytes_down": sum(f.bytes_recv for f in flows) + an.retired_down,
+            "capturing": capturing,
+            "session_id": session_id,
             "rst_sent": reset.sent,
-            "firewall_blocks": len(blocked),
+            "firewall_blocks": len(blocked) + (1 if shield[0] else 0),
+            "quic_shield": shield[0],
             "apps": sorted(
                 ({"app": k, **v} for k, v in apps.items()),
                 key=lambda a: a["bytes"], reverse=True),
@@ -295,6 +342,56 @@ def get_alerts(limit: int = 100):
 @app.get("/")
 def index():
     return FileResponse("static/index.html")
+
+
+def capture_state():
+    with lock:
+        return {"capturing": capturing, "session_id": session_id,
+                "flows": len(an.fm.flows)}
+
+
+@app.get("/capture")
+def get_capture():
+    return capture_state()
+
+
+@app.post("/capture/stop")
+def capture_stop():
+    """Pause sniffing and RST injection. Firewall blocks already in place stay."""
+    with ctl:
+        if capturing:
+            stop_sniffer()
+            save_now()
+        return capture_state()
+
+
+@app.post("/capture/start")
+def capture_start(fresh: bool = False):
+    """Resume sniffing. fresh=true archives the current session and starts a new one."""
+    global an, session_id
+    with ctl:
+        if capturing:
+            return capture_state()
+        if fresh:
+            save_now()
+            db.end_session(session_id)
+            with lock:
+                an = TrafficAnalyzer(expire=True)
+                dropped[0] = 0
+                reset.sent = 0
+                try:
+                    while True:
+                        q.get_nowait()
+                except queue.Empty:
+                    pass
+            session_id = db.start_session(str(iface), BPF)
+        try:
+            start_sniffer()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"cannot start capture: {e}")
+        with lock:
+            recheck_all()                 # apply rules that changed while stopped
+        return capture_state()
 
 
 @app.get("/resets")

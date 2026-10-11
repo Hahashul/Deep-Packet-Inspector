@@ -37,6 +37,28 @@
   .topbar { display:flex; align-items:center; justify-content:space-between; padding:16px 0 0; }
   .brand { font:700 16px var(--display); letter-spacing:.01em; display:flex; align-items:center; gap:10px; }
   .brand svg { width:22px; height:22px; }
+  [hidden] { display:none !important; }
+  .tools { position:relative; display:flex; align-items:center; gap:12px; }
+  .capctl { display:inline-flex; align-items:stretch; border:1px solid var(--band-line); border-radius:10px; overflow:hidden; }
+  .capctl .live { padding:7px 14px; }
+  .capctl .live:not(.on) .pulse { background:var(--band-muted); }
+  .capbtn { display:inline-flex; align-items:center; gap:8px; background:transparent; color:var(--band-text); border:0; border-left:1px solid var(--band-line); padding:7px 16px; font-size:13px; font-weight:600; cursor:pointer; }
+  .capbtn:hover { background:rgba(255,255,255,.06); }
+  .capbtn:disabled { opacity:.5; cursor:default; }
+  .capbtn.go { background:var(--down-b); color:#06201d; border-left-color:var(--down-b); }
+  .capbtn.go:hover { filter:brightness(1.08); }
+  .capbtn i { display:inline-block; }
+  .capbtn .sq { width:9px; height:9px; background:var(--cut-b); border-radius:2px; }
+  .capbtn .tri { border-left:9px solid #06201d; border-top:5.5px solid transparent; border-bottom:5.5px solid transparent; }
+  body.paused .hero, body.paused #trace { opacity:.5; transition:opacity .3s; }
+  .pop { position:absolute; top:calc(100% + 10px); right:0; width:min(330px, 88vw); z-index:30; background:var(--surface); color:var(--text); border:1px solid var(--line); border-radius:12px; padding:8px; box-shadow:0 12px 32px rgba(0,0,0,.35); }
+  .pop-title { font:700 13px var(--display); padding:6px 10px 8px; color:var(--muted); }
+  .opt { display:block; width:100%; text-align:left; background:none; border:0; border-radius:8px; padding:10px 12px; cursor:pointer; }
+  .opt:hover, .opt:focus-visible { background:var(--hover); }
+  .opt b { display:block; font-weight:600; }
+  .opt span { display:block; margin-top:2px; font-size:12.5px; color:var(--muted); }
+  .pop-cancel { display:block; width:100%; margin-top:4px; padding:8px; background:none; border:0; border-top:1px solid var(--line); border-radius:0 0 8px 8px; color:var(--muted); cursor:pointer; }
+  .pop-cancel:hover { color:var(--text); }
   .live { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--band-muted); }
   .pulse { width:8px; height:8px; border-radius:50%; background:var(--cut-b); }
   .live.on .pulse { background:var(--down-b); animation:pulse 2s ease-in-out infinite; }
@@ -84,6 +106,20 @@
   .ledger tr.block td:first-child { box-shadow:inset 3px 0 0 var(--cut); }
   .ledger tr.just-cut td { animation:cutflash 1.4s ease-out; }
   @keyframes cutflash { from { background:var(--cut-bg); } to { background:transparent; } }
+  .nmrow { display:flex; align-items:center; gap:8px; min-width:0; }
+  .nmrow .nm { min-width:0; }
+  .chev { width:18px; height:18px; flex:none; background:none; border:0; padding:0; cursor:pointer; color:var(--muted); display:inline-flex; align-items:center; justify-content:center; }
+  .chev::before { content:""; border-left:5px solid currentColor; border-top:4px solid transparent; border-bottom:4px solid transparent; transition:transform .12s; }
+  .chev[aria-expanded=true]::before { transform:rotate(90deg); }
+  .cnt { flex:none; font-size:12px; color:var(--muted); background:var(--hover); border:1px solid var(--line); border-radius:999px; padding:0 7px; }
+  .cnt:empty { display:none; }
+  tr.grp .nmrow { cursor:pointer; }
+  tr.child td { background:rgba(127,127,127,.05); }
+  tr.child td:first-child { padding-left:40px; }
+  tr.child .nm { font-weight:400; font-size:13px; }
+  .notice { margin:12px 0 0; padding:9px 12px; border:1px solid var(--line); border-left:3px solid var(--flag); border-radius:8px; background:var(--surface); font-size:13px; }
+  .why { color:var(--muted); font-size:12px; }
+  .why:empty { display:none; }
   .nm { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .nm.dim { font-weight:400; color:var(--muted); }
   .meta { display:flex; align-items:center; gap:8px; margin-top:3px; font-size:12.5px; color:var(--muted); white-space:nowrap; overflow:hidden; }
@@ -107,7 +143,7 @@
   .btn.danger:hover { border-color:var(--cut); color:var(--cut); }
   .empty { padding:36px 10px; color:var(--muted); }
   .empty b { color:var(--text); display:block; margin-bottom:2px; }
-  @media (max-width:640px) { .acts .btn:first-child { display:none; } .wire, .col-wire, .col-up, .addr { display:none; } .wrap { padding:0 16px; } }
+  @media (max-width:640px) { .wire, .col-wire, .col-up, .addr { display:none; } .wrap { padding:0 16px; } }
 
   /* ---------- rail ---------- */
   .rail section { padding-bottom:28px; margin-bottom:28px; border-bottom:1px solid var(--line); }
@@ -146,7 +182,18 @@
         <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 16h8l3-8 4 16 3-8h8" fill="none" stroke="#3FD6C8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Traffic Analyzer
       </div>
-      <div class="live" id="live" role="status"><span class="pulse"></span><span id="status">Connecting</span></div>
+      <div class="tools">
+        <div class="capctl">
+          <div class="live" id="live" role="status"><span class="pulse"></span><span id="status">Connecting</span></div>
+          <button class="capbtn" id="cap-btn" type="button" aria-haspopup="dialog" aria-expanded="false" hidden></button>
+        </div>
+        <div class="pop" id="cap-pop" role="dialog" aria-label="Resume capture" hidden>
+          <div class="pop-title">Resume capture</div>
+          <button class="opt" id="cap-continue" type="button"><b>Continue session</b><span id="cap-keep">Keep the earlier connections and counters</span></button>
+          <button class="opt" id="cap-fresh" type="button"><b>Start a fresh session</b><span>Save this one to history, then begin with an empty list</span></button>
+          <button class="pop-cancel" id="cap-cancel" type="button">Cancel</button>
+        </div>
+      </div>
     </div>
 
     <div class="hero">
@@ -175,6 +222,7 @@
   <div>
     <h2>Connections</h2>
     <div class="sub num" id="ledger-sub">Waiting for traffic</div>
+    <div class="notice" id="notice" hidden></div>
 
     <div class="tools">
       <input class="search" id="q" type="search" placeholder="Search by name, app or address" aria-label="Search connections">
@@ -255,6 +303,7 @@ function toast(msg) {
 let rules = [];
 async function loadRules() {
   rules = await (await fetch("/rules")).json();
+  setTimeout(updateNotice);
   const ul = $("rulelist");
   ul.innerHTML = rules.length ? rules.map(r =>
     `<li><span class="badge ${r.action}">${r.action === "block" ? "Block" : "Flag"}</span>
@@ -289,8 +338,8 @@ loadRules();
 /* ---------- connection ---------- */
 function connect() {
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onopen = () => { $("live").classList.add("on"); $("status").textContent = "Live"; };
-  ws.onclose = () => { $("live").classList.remove("on"); $("status").textContent = "Reconnecting"; setTimeout(connect, 2000); };
+  ws.onopen = () => setCapture(capturing !== false);
+  ws.onclose = () => { $("live").classList.remove("on"); $("status").textContent = "Reconnecting"; $("cap-btn").hidden = true; pop(false); setTimeout(connect, 2000); };
   ws.onmessage = e => render(JSON.parse(e.data));
 }
 
@@ -330,41 +379,85 @@ function drawTrace() {
 }
 
 /* ---------- ledger ---------- */
-const state = { q: "", show: "", sort: "traffic", hover: false };
+const state = { q: "", show: "", sort: "traffic", hover: false, open: new Set() };
 const rowEls = new Map();
+const rowData = new Map();     // row id -> group or flow object, for the rule menu
 const tbody = $("rows");
 $("q").addEventListener("input", e => { state.q = e.target.value.trim().toLowerCase(); redraw(); });
 $("sort").addEventListener("change", e => { state.sort = e.target.value; redraw(); });
 document.querySelectorAll("input[name=show]").forEach(r => r.addEventListener("change", e => { state.show = e.target.value; redraw(); }));
 tbody.addEventListener("mouseenter", () => state.hover = true);
 tbody.addEventListener("mouseleave", () => state.hover = false);
+function ruleFor(f) {
+  if (f.name) return f.app && f.app !== "Unknown" ? ["app", f.app] : ["domain", f.name];
+  return ["ip", f.server.replace(/:\d+$/, "")];
+}
 tbody.addEventListener("click", e => {
-  const b = e.target.closest("[data-act]");
-  if (!b) return;
-  const f = lastFlows.find(x => x.id === b.closest("tr").dataset.id);
+  const tr = e.target.closest("tr");
+  const f = tr && rowData.get(tr.dataset.id);
   if (!f) return;
-  const [type, value] = f.name ? ["domain", f.name] : ["ip", f.server.replace(/:\d+$/, "")];
-  createRule(type, value, b.dataset.act);
+  const b = e.target.closest("[data-act]");
+  if (b) {
+    const [type, value] = ruleFor(f);
+    return createRule(type, value, b.dataset.act);
+  }
+  if (f.flows && f.count > 1 && e.target.closest(".nmrow")) {     // expand / collapse a group
+    state.open.has(f.id) ? state.open.delete(f.id) : state.open.add(f.id);
+    redraw();
+  }
 });
 
 function makeRow() {
   const tr = document.createElement("tr");
-  tr.innerHTML = `<td><div class="nm"></div><div class="meta"><span class="pill"></span><span class="proto"></span><span class="addr num"></span></div></td>
+  tr.innerHTML = `<td><div class="nmrow"><button class="chev" type="button" aria-expanded="false"></button><div class="nm"></div><span class="cnt"></span></div><div class="meta"><span class="pill"></span><span class="proto"></span><span class="addr num"></span><span class="why"></span></div></td>
     <td class="col-wire"><div class="wire"><div class="fill"><div class="d"></div><div class="u"></div></div></div></td>
     <td class="r num dn"></td><td class="r num up col-up"></td><td class="state"></td>`;
   return tr;
 }
-function updateRow(tr, f, maxB) {
-  const q = f.protocol === "UDP" && f.server.endsWith(":443");
+const isQuic = f => f.protocol === "UDP" && f.server.endsWith(":443");
+function groupFlows(flows) {
+  const map = new Map();
+  for (const f of flows) {
+    const ip = f.server.replace(/:\d+$/, "");
+    const key = f.name ? "n:" + f.name.toLowerCase() : "i:" + ip;
+    let g = map.get(key);
+    if (!g) {
+      g = {id: "g:" + key, name: f.name, dns_name: f.dns_name, app: f.app, server: f.server,
+           protocols: new Set(), servers: new Set(), bytes_sent: 0, bytes_recv: 0, total_bytes: 0,
+           latest: 0, action: "", matched_rule: "", midstream: true, count: 0, flows: []};
+      map.set(key, g);
+    }
+    g.flows.push(f); g.count++;
+    g.bytes_sent += f.bytes_sent; g.bytes_recv += f.bytes_recv; g.total_bytes += f.total_bytes;
+    g.latest = Math.max(g.latest, f.first_seen);
+    g.servers.add(f.server); g.protocols.add(isQuic(f) ? "QUIC" : f.protocol);
+    if (f.action === "block" || (f.action === "flag" && g.action !== "block")) { g.action = f.action; g.matched_rule = f.matched_rule; }
+    if (!f.midstream) g.midstream = false;
+    if (!g.dns_name && f.dns_name) g.dns_name = f.dns_name;
+    if (g.app === "Unknown" && f.app !== "Unknown") g.app = f.app;
+  }
+  return [...map.values()];
+}
+function updateRow(tr, f, maxB, child) {
+  const grp = !!f.flows, expandable = grp && f.count > 1;
   const name = f.name || f.dns_name;
   const nm = tr.querySelector(".nm");
-  nm.textContent = name ? name + (f.name ? "" : " (from DNS)") : "Unnamed connection";
-  nm.className = "nm" + (f.name ? "" : " dim");
-  nm.title = name || "";
-  tr.querySelector(".pill").textContent = f.app;
+  nm.textContent = child ? f.client : name ? name + (f.name ? "" : " (from DNS)") : "Name not visible";
+  nm.className = "nm" + (child || !f.name ? " dim" : "");
+  nm.title = child ? f.client : (name || "");
+  const open = state.open.has(f.id), chev = tr.querySelector(".chev");
+  chev.style.visibility = expandable ? "visible" : "hidden";
+  chev.setAttribute("aria-expanded", String(open));
+  chev.setAttribute("aria-label", `${open ? "Hide" : "Show"} ${f.count} connections`);
+  tr.querySelector(".cnt").textContent = expandable ? "\u00d7" + f.count : "";
+  const pill = tr.querySelector(".pill"); pill.textContent = f.app; pill.hidden = !!child;
   const pr = tr.querySelector(".proto");
-  pr.textContent = q ? "QUIC" : f.protocol; pr.className = "proto" + (q ? " quic" : "");
-  tr.querySelector(".addr").textContent = f.server;
+  const label = grp ? [...f.protocols].join(" + ") : isQuic(f) ? "QUIC" : f.protocol;
+  pr.textContent = label; pr.className = "proto" + (label === "QUIC" ? " quic" : "");
+  tr.querySelector(".addr").textContent = grp && f.servers.size > 1 ? `${f.servers.size} addresses` : f.server;
+  tr.querySelector(".why").textContent = f.action
+    ? (f.action === "block" ? "blocked by " : "flagged by ") + f.matched_rule
+    : (f.name || child ? "" : f.midstream ? "joined mid-connection, so no name" : "no TLS name seen");
   const share = Math.sqrt(f.total_bytes / maxB);          // sqrt keeps small flows visible without flattening the big ones
   const fill = tr.querySelector(".fill"), tot = Math.max(1, f.bytes_sent + f.bytes_recv);
   fill.style.width = (share * 100).toFixed(1) + "%";
@@ -375,13 +468,15 @@ function updateRow(tr, f, maxB) {
   tr.querySelector(".up").textContent = fmt(f.bytes_sent);
   const was = tr.dataset.action || "";
   tr.dataset.action = f.action;
-  tr.className = f.action === "block" ? "block" : f.action === "flag" ? "flag" : "";
+  tr.className = (f.action === "block" ? "block" : f.action === "flag" ? "flag" : "") + (child ? " child" : "") + (expandable ? " grp" : "");
   if (f.action === "block" && was !== "block" && tr.dataset.seen) tr.classList.add("just-cut");
   tr.dataset.seen = "1";
   const st = tr.querySelector(".state");
   const badge = f.action ? `<span class="badge ${f.action}" title="${esc(f.matched_rule)}">${f.action === "block" ? "Blocked" : "Flagged"}</span>` : "";
-  const acts = f.action === "block" ? "" :
-    `<span class="acts"><button class="btn" data-act="flag">Flag</button><button class="btn danger" data-act="block">Block</button></span>`;
+  const [rt, rv] = grp || !child ? ruleFor(f) : ["", ""];
+  const what = rt === "app" ? `all ${rv}` : rt === "ip" ? `address ${rv}` : rv;
+  const acts = child || f.action === "block" ? "" :
+    `<span class="acts"><button class="btn" data-act="flag" title="Flag ${esc(what)}">Flag</button><button class="btn danger" data-act="block" title="Block ${esc(what)}">Block</button></span>`;
   const html = badge + acts;
   if (st.dataset.h !== html) { st.innerHTML = html; st.dataset.h = html; }
 }
@@ -390,17 +485,29 @@ let lastFlows = [], lastStats = null;
 function redraw() { if (lastStats) renderLedger(lastFlows, lastStats); }
 
 function renderLedger(flows, st) {
-  let list = flows.filter(f => (!state.show || f.action === state.show) &&
-    (!state.q || `${f.name} ${f.dns_name} ${f.app} ${f.server}`.toLowerCase().includes(state.q)));
-  list.sort(state.sort === "new" ? (a, b) => b.first_seen - a.first_seen : (a, b) => b.total_bytes - a.total_bytes);
-  list = list.slice(0, 60);
-  const maxB = Math.max(1, ...list.map(f => f.total_bytes));
+  const kept = flows.filter(f => (!state.show || f.action === state.show) &&
+    (!state.q || `${f.name} ${f.dns_name} ${f.app} ${f.server} ${f.client}`.toLowerCase().includes(state.q)));
+  let groups = groupFlows(kept);
+  groups.sort(state.sort === "new" ? (a, b) => b.latest - a.latest : (a, b) => b.total_bytes - a.total_bytes);
+  groups = groups.slice(0, 60);
+  const maxB = Math.max(1, ...groups.map(g => g.total_bytes));
+  const entries = [];
+  rowData.clear();
+  for (const g of groups) {
+    rowData.set(g.id, g);
+    entries.push([g, maxB, false]);
+    if (g.count > 1 && state.open.has(g.id))
+      for (const f of g.flows.slice().sort((a, b) => b.total_bytes - a.total_bytes)) {
+        rowData.set(f.id, f);
+        entries.push([f, Math.max(1, g.total_bytes), true]);
+      }
+  }
   const seen = new Set();
   let prevEl = null;
-  for (const f of list) {
+  for (const [f, scale, child] of entries) {
     let tr = rowEls.get(f.id);
     if (!tr) { tr = makeRow(); tr.dataset.id = f.id; rowEls.set(f.id, tr); }
-    updateRow(tr, f, maxB);
+    updateRow(tr, f, scale, child);
     seen.add(f.id);
     if (!state.hover || !tr.isConnected) {          // hold the order while the pointer is on the table
       const ref = prevEl ? prevEl.nextSibling : tbody.firstChild;
@@ -411,13 +518,13 @@ function renderLedger(flows, st) {
   for (const [id, tr] of rowEls) if (!seen.has(id)) { tr.remove(); rowEls.delete(id); }
 
   const empty = $("empty");
-  empty.hidden = list.length > 0;
-  if (!list.length) {
+  empty.hidden = groups.length > 0;
+  if (!groups.length) {
     empty.innerHTML = flows.length
       ? "<b>Nothing matches.</b>Clear the search or switch back to All."
       : "<b>No connections yet.</b>Open a website or app and traffic will appear here.";
   }
-  $("ledger-sub").textContent = `${st.active_flows} active, ${st.total_flows} seen this session, ${fmt(st.total_bytes)} in total`;
+  $("ledger-sub").textContent = `${st.active_flows} active connections to ${groups.length} destinations, ${fmt(st.total_bytes)} in total`;
 }
 
 /* ---------- rail ---------- */
@@ -433,6 +540,7 @@ let flowsSeen = false;
 function render({stats, flows}) {
   lastFlows = flows; lastStats = stats;
   sample(stats); drawTrace();
+  if (typeof stats.capturing === "boolean") setCapture(stats.capturing);   // older servers lack it
   const recent = samples.slice(-3);
   const avg = k => recent.length ? recent.reduce((a, s) => a + s[k], 0) / recent.length : 0;
   $("rate-down").textContent = fmt(avg("down"));
@@ -443,7 +551,7 @@ function render({stats, flows}) {
   renderLedger(flows, stats);
   bars($("apps"), stats.apps.slice(0, 8), "app", "No apps identified yet.");
   bars($("domains"), stats.top_domains.slice(0, 8), "domain", "No domains seen yet.");
-  $("health").textContent = `Capture queue ${stats.queue}, dropped packets ${stats.dropped}`;
+  $("health").textContent = `Capture queue ${stats.queue}, dropped packets ${stats.dropped}${stats.quic_shield ? ". QUIC is blocked while block rules are active, so browsers use TCP" : ""}`;
 
   // suggestions for the rule form
   const type = $("rtype").value;
@@ -458,6 +566,63 @@ $("rtype").addEventListener("change", () => {
   $("rvalue").placeholder = {domain:"reddit.com", app:"YouTube", ip:"203.0.113.7"}[$("rtype").value];
   $("suggest").dataset.k = ""; if (lastStats) render({stats:lastStats, flows:lastFlows});
 });
+
+/* ---------- start / stop ---------- */
+let capturing = null;
+function updateNotice() {
+  const n = $("notice");
+  const soft = rules.some(r => r.action === "block" && r.type !== "ip");
+  n.hidden = !(capturing === false && soft);
+  n.textContent = "Capture is paused, so domain and app blocks are not enforced right now. Only firewall blocks (IP rules and the QUIC shield) stay active. Press Start to resume.";
+}
+function setCapture(on) {
+  capturing = on;
+  const b = $("cap-btn");
+  b.hidden = false;
+  b.className = "capbtn" + (on ? "" : " go");
+  b.innerHTML = on ? '<i class="sq"></i>Stop' : '<i class="tri"></i>Start';
+  b.setAttribute("aria-label", on ? "Stop capture" : "Start capture");
+  $("live").classList.toggle("on", on);
+  $("status").textContent = on ? "Live" : "Paused";
+  document.body.classList.toggle("paused", !on);
+  updateNotice();
+  if (on) pop(false);
+}
+function pop(show) {
+  const p = $("cap-pop");
+  if (p.hidden === !show) return;
+  p.hidden = !show;
+  $("cap-btn").setAttribute("aria-expanded", String(show));
+  if (show) {
+    const n = lastStats?.total_flows ?? 0;
+    $("cap-keep").textContent = `Keep ${n} connection${n === 1 ? "" : "s"} (${fmt(lastStats?.total_bytes ?? 0)}) and keep counting`;
+    $("cap-continue").focus();
+  } else $("cap-btn").focus({preventScroll: true});
+}
+async function capCall(path) {
+  const b = $("cap-btn"); b.disabled = true;
+  try {
+    const res = await fetch(path, {method: "POST"});
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
+    const s = await res.json();
+    setCapture(s.capturing);
+    const soft = rules.some(r => r.action === "block" && r.type !== "ip");
+    toast(!s.capturing ? "Capture paused. Firewall blocks stay in place."
+      : soft ? "Capture resumed. Pages opened while paused may need a reload to be blocked." : "Capture started");
+  } catch (e) { toast("Could not change capture: " + e.message); }
+  b.disabled = false;
+}
+$("cap-btn").addEventListener("click", () => {
+  if (capturing) return capCall("/capture/stop");
+  if (!$("cap-pop").hidden) return pop(false);
+  if ((lastStats?.total_flows ?? 0) > 0) pop(true);   // old data exists: let the user choose
+  else capCall("/capture/start");
+});
+$("cap-continue").addEventListener("click", () => { pop(false); capCall("/capture/start"); });
+$("cap-fresh").addEventListener("click", () => { pop(false); capCall("/capture/start?fresh=true"); });
+$("cap-cancel").addEventListener("click", () => pop(false));
+document.addEventListener("keydown", e => { if (e.key === "Escape") pop(false); });
+document.addEventListener("click", e => { if (!e.target.closest(".tools")) pop(false); });
 
 drawTrace();
 connect();

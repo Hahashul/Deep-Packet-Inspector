@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 from unittest import mock
 import server
+server.capturing = True      # enforcement only runs while capture is on
 
 
 def test_block_then_unblock_on_rule_delete():

@@ -1,58 +1,132 @@
 # Real-Time Network Traffic Analyzer
 
-Identifies which domains and apps a network is using **without decrypting traffic**,
-by reading the unencrypted TLS ClientHello (SNI) and HTTP Host headers.
-Live dashboard over WebSocket.
+Shows which **domains and apps** a network is using, live, **without decrypting any traffic**.
+It reads what is sent in the clear: the TLS ClientHello (SNI), HTTP `Host` headers, the QUIC
+Initial packet, and DNS answers. Rules can flag or **block** by domain, app or IP.
+
+> Domain extraction matches Wireshark on **192/192 TCP flows and 18/18 QUIC flows**
+> (100% precision and recall). See [Validation](#validation).
 
 ## Features
-- Live packet capture (Scapy + BPF filter), producer/consumer queue
-- Flow tracking by 5-tuple, upload/download counted separately
-- SNI extraction with TCP reassembly for split ClientHellos
-- QUIC/HTTP3 naming: decrypts the client Initial packet (keys are public per RFC 9001) and reads its ClientHello, incl. ClientHellos split across packets
-- Domain-to-app classifier (YouTube, Google, GitHub, ads/trackers, ...)
-- Flag or block by domain, IP or app, editable live
-- Domain-aware blocking: connections whose SNI/Host matches a domain or app block rule are reset with an injected TCP RST (QUIC: UDP/443 to that IP is blocked so browsers fall back to TCP) (no IP blocking, so no collateral damage on shared CDNs). IP rules use the Windows firewall
-- FastAPI REST + WebSocket, single-page dashboard
+- **Live capture** with Scapy and a BPF filter; a producer/consumer queue keeps the sniffer fast
+- **Flow tracking** by 5-tuple, with upload and download counted separately and idle/closed flows expired
+- **SNI extraction** from TLS, with TCP reassembly for ClientHellos split across packets
+- **QUIC/HTTP3 naming**: derives the Initial-packet keys (public, RFC 9001), decrypts the handshake
+  only, and reads its ClientHello; CRYPTO frames are reassembled across packets (QUIC v1 and v2)
+- **DNS fallback**: IP-to-name learned from plaintext DNS answers, used when no SNI was seen
+- **Classifier** that maps domains to apps (YouTube, Google, GitHub, Netflix, ads/trackers, ...)
+- **Rules by domain, app or IP**, each with action `flag` or `block`, editable live
+- **Domain-aware blocking** (see below)
+- **History**: sessions, flows and alerts saved to SQLite
+- **FastAPI REST + WebSocket** and a single-page dashboard
+
+## How it works
+```
+ Npcap/Scapy ──> queue ──> worker ──> flow table ──> rule engine ──> dashboard (WebSocket)
+ (BPF filter)              │            │                  │
+                           │            │                  ├─ flag  -> alert saved to SQLite
+                           │            │                  └─ block -> enforcement
+                           ├─ TLS SNI / HTTP Host (TCP, with reassembly)
+                           ├─ QUIC Initial -> ClientHello (UDP/443)
+                           └─ DNS answers  -> IP-to-name fallback
+```
+
+## Domain-aware blocking
+Blocking by IP breaks on shared CDN addresses (blocking one site takes down others on the same
+IP) and only acts after a connection exists. Instead:
+
+| Rule type | Mechanism |
+|---|---|
+| `domain`, `app` (TCP) | When the SNI/Host matches, inject a **TCP RST** at the connection's tracked sequence number. Only that connection dies; no IP is blocked. Retries are reset the same way. |
+| `domain`, `app` (QUIC) | RST does not exist for UDP, so UDP/443 to that server IP is firewall-blocked. The browser falls back to TCP, where the RST applies. Other domains on the IP are unaffected. |
+| `ip` | Windows firewall outbound block on that IP. |
+
+Removing a rule removes its firewall entries; leftover entries from a crashed run are cleaned up
+at startup. Packets are injected as raw Ethernet frames through Npcap, because Windows blocks raw
+TCP sockets.
 
 ## Setup (Windows)
-1. Install Python 3.11+ and [Wireshark/Npcap](https://www.wireshark.org/)
-2. ```
+1. Install Python 3.11+ and [Wireshark/Npcap](https://www.wireshark.org/) (Npcap is required)
+2. In the project folder:
+   ```powershell
    python -m venv venv
    venv\Scripts\Activate.ps1
    pip install -r requirements.txt
-````
-3. Run from an **Administrator** terminal:
-````
+   ```
+3. Run from an **Administrator** terminal (needed for capture, packet injection and firewall rules):
+   ```powershell
    uvicorn server:app --port 8000
-````
-   Set `$env:IFACE="Wi-Fi"` first if the wrong interface is picked.
+   ```
+   If the wrong network interface is picked, set it first: `$env:IFACE="Wi-Fi"`
 4. Open http://127.0.0.1:8000
 
-Offline demos: `python step5_apps.py your.pcap`
+## Usage
+1. Browse normally; flows appear with domain, app, bytes up/down and a FLAGGED badge on matches.
+2. Add a rule in the dashboard: choose type (`domain` / `app` / `ip`), value (e.g. `reddit.com`,
+   `YouTube`), and action `Flag` or `Block`.
+3. Reload the site. For `Block`, the connection is reset (QUIC sites fall back to TCP first, so
+   expect a short delay).
+4. Delete the rule to lift the block.
+
+Fully close and reopen the browser after adding a block rule: connections that were already open
+are only reset if they send more data.
+
+## API
+| Endpoint | Description |
+|---|---|
+| `GET /flows`, `GET /stats` | Current flows and totals |
+| `WS /ws` | Live stream for the dashboard |
+| `GET/POST /rules`, `DELETE /rules/{id}` | Manage rules |
+| `GET /blocked` | Active firewall blocks and the rule behind each |
+| `GET /resets` | Number of RSTs injected |
+| `GET /sessions`, `/sessions/{id}/flows`, `/alerts` | History from SQLite |
 
 ## Validation
-Domain extraction is cross-checked against Wireshark/tshark (an independent TLS/HTTP
-dissector) with `validate_sni.py`, matching flows by 5-tuple.
+Name extraction is cross-checked against Wireshark's tshark, an independent dissector, with
+`validate_sni.py`, matching flows by 5-tuple.
 
-| Metric (TCP, 192 flows, one browsing capture) | Result |
+| One browsing capture | Flows | Recall | Precision |
+|---|---|---|---|
+| TCP (TLS SNI / HTTP Host) | 192 | 100.0% | 100.0% |
+| QUIC (UDP/443) | 18 | 100.0% | 100.0% |
+
+Byte-weighted agreement on TCP is also 100%, and tshark can name 98.4% of all TCP bytes.
+Run it yourself:
+```powershell
+python validate_sni.py your.pcap --csv report.csv
+```
+
+## Tests
+```powershell
+python test_blocking.py     # block bookkeeping and RST/QUIC enforcement logic (mocked)
+python test_quic.py         # RFC 9001 key vectors and QUIC Initial parsing
+python test_classifier.py
+```
+`test_dns.py` and `test_expiry.py` take a pcap: `python test_dns.py your.pcap`.
+Offline demos of each build stage: `python step5_apps.py your.pcap`.
+
+## Project layout
+| File | Role |
 |---|---|
-| Recall (flows tshark named that we also named) | 100.0% |
-| Precision (names that match tshark's) | 100.0% |
-| Byte-weighted agreement | 100.0% |
-| TCP bytes tshark can name | 98.4% |
-
-| QUIC flows named (18 flows): recall / precision | 100.0% / 100.0% |
-
-QUIC is ~9% of flows in this capture (18 of 210).
-Run it yourself: `python validate_sni.py your.pcap --csv report.csv`
+| `server.py` | FastAPI app, capture, worker, rule enforcement |
+| `analyzer.py` | Per-packet pipeline: flows, SNI, QUIC, DNS fallback |
+| `step2_flows.py`, `step3_sni.py`, `step4_reassembly.py` | Flow table, TLS/HTTP parsing, TCP reassembly |
+| `quic.py` | QUIC Initial decryption and ClientHello extraction |
+| `dns_cache.py`, `classifier.py` | DNS name fallback, domain-to-app map |
+| `rules.py`, `enforce.py`, `reset.py` | Rule engine, firewall blocks, TCP RST injection |
+| `db.py`, `static/index.html` | SQLite persistence, dashboard |
+| `validate_sni.py` | Accuracy check against Wireshark |
 
 ## Known limitations
-- Encrypted Client Hello is not classified
-- QUIC flows are named from the handshake only: their byte counts cover Initial packets, not the whole stream
+- Encrypted Client Hello (ECH) hides the SNI and cannot be classified
 - Connections that started before capture began cannot be named
-- RST blocking races the real traffic and is TCP-only: QUIC is handled indirectly: a matching QUIC flow gets UDP/443 to that IP firewall-blocked, forcing the browser back to TCP where the RST applies
-- Firewall rules from a crashed run are not cleaned up on next start
+- RST blocking races the real traffic: the ClientHello has already left, so a connection can
+  occasionally slip through; browser retries are reset the same way
+- QUIC flows are named from the handshake only, so their byte counts cover Initial packets, not
+  the whole stream
+- Blocking a QUIC site relies on the browser falling back to TCP
+- Windows only for enforcement (`netsh` firewall, Npcap injection); capture and analysis work
+  wherever Scapy does
 
 ## Legal
-Only capture traffic on networks and machines you own or have explicit
-permission to monitor.
+Only capture traffic on networks and machines you own or have explicit permission to monitor.

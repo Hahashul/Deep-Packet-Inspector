@@ -15,9 +15,13 @@ from db import Database, flow_id, flow_row
 from rules import RuleEngine
 from step6_live import pick_iface
 
-from enforce import block_ip, unblock_ip
+from enforce import block_ip, unblock_ip, block_udp443, unblock_udp443, cleanup_stale
+import reset
+import traceback
 
-BPF = "tcp port 80 or tcp port 443 or port 53"   # port 53 = DNS (UDP+TCP) for the name fallback
+# QUIC: only client/server *Initial* packets (long header, type bits 0b00/0b01) so video streams stay cheap
+QUIC_INITIAL = "(udp port 443 and ((ip and udp[8] & 0xe0 = 0xc0) or (ip6 and ip6[48] & 0xe0 = 0xc0)))"
+BPF = "tcp port 80 or tcp port 443 or port 53 or " + QUIC_INITIAL   # port 53 = DNS (UDP+TCP) for the name fallback
 
 an = TrafficAnalyzer(expire=True)
 rules = RuleEngine()
@@ -26,7 +30,7 @@ session_id = None
 lock = threading.Lock()
 q = queue.Queue(maxsize=20000)
 stop = threading.Event()
-blocked_ips = set()
+blocked = {}          # ip -> rule key ('type:value') that caused the block
 dropped = [0]
 sniffer = None
 
@@ -46,16 +50,42 @@ def recheck_all():
             db.add_alert(session_id, flow_id(f), f.matched_rule)
         if now:
             enforce_if_block(f)
+    sync_blocks()
+
+def block_rule(flow):
+    for r in rules.list():
+        if r["action"] == "block" and f"{r['type']}:{r['value']}" == flow.matched_rule:
+            return r
+
 
 def enforce_if_block(flow):
-    rule_action = flow.matched_rule.split(":", 1)[0]
-    for r in rules.list():
-        hit = f"{r['type']}:{r['value']}"
-        if hit == flow.matched_rule and r["action"] == "block":
-            if flow.server_ip not in blocked_ips:
-                block_ip(flow.server_ip)
-                blocked_ips.add(flow.server_ip)
-            return
+    """ip rules -> firewall; domain/app rules -> TCP RST on this connection."""
+    r = block_rule(flow)
+    if not r:
+        return
+    if r["type"] == "ip":
+        if flow.server_ip not in blocked:
+            block_ip(flow.server_ip)
+            blocked[flow.server_ip] = flow.matched_rule
+    elif flow.protocol == "UDP":
+        if flow.server_port == 443 and "udp:" + flow.server_ip not in blocked:
+            block_udp443(flow.server_ip)                      # force fallback to TCP
+            blocked["udp:" + flow.server_ip] = flow.matched_rule
+    else:
+        reset.reset_flow(flow)
+
+
+def sync_blocks():
+    """Unblock IPs whose owning block rule no longer exists."""
+    live = {f"{r['type']}:{r['value']}" for r in rules.list() if r["action"] == "block"}
+    for key, hit in list(blocked.items()):
+        if hit not in live:
+            if key.startswith("udp:"):
+                unblock_udp443(key[4:])
+            else:
+                unblock_ip(key)
+            del blocked[key]
+
 
 def worker():
     while not stop.is_set():
@@ -63,13 +93,18 @@ def worker():
             pkt = q.get(timeout=0.5)
         except queue.Empty:
             continue
-        with lock:
-            flow = an.process(pkt)
-            if flow is not None and not flow.flagged:
-                if rules.evaluate(flow):
-                    db.add_alert(session_id, flow_id(flow), flow.matched_rule)
-                    enforce_if_block(flow)
-            done = an.reap()
+        try:
+            with lock:
+                flow = an.process(pkt)
+                if flow is not None:
+                    if not flow.flagged and rules.evaluate(flow):
+                        db.add_alert(session_id, flow_id(flow), flow.matched_rule)
+                    if flow.flagged:
+                        enforce_if_block(flow)
+                done = an.reap()
+        except Exception:
+            traceback.print_exc()             # never let one bad packet kill the worker
+            continue
         if done:
             db.save_flows([flow_row(session_id, f) for f in done])
 
@@ -90,6 +125,8 @@ async def lifespan(app):
     iface = pick_iface(os.environ.get("IFACE"))
     for r in db.load_rules():
         rules.add(r["type"], r["value"], r["id"], r.get("action", "flag"))
+    cleanup_stale()                       # drop firewall rules left by earlier runs
+    reset.start(iface)
     session_id = db.start_session(str(iface), BPF)
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=saver, daemon=True).start()
@@ -98,6 +135,10 @@ async def lifespan(app):
     yield
     stop.set()
     sniffer.stop()
+    with lock:
+        for key in list(blocked):
+            unblock_udp443(key[4:]) if key.startswith("udp:") else unblock_ip(key)
+        blocked.clear()
     save_now()
     db.end_session(session_id)
 
@@ -240,6 +281,11 @@ def index():
     return FileResponse("static/index.html")
 
 
+@app.get("/resets")
+def get_resets():
+    return {"rst_sent": reset.sent}
+
+
 @app.get("/blocked")
 def get_blocked():
-    return sorted(blocked_ips)
+    return blocked

@@ -1,10 +1,11 @@
 from collections import defaultdict
-from scapy.all import TCP, IP, IPv6
+from scapy.all import TCP, UDP, IP, IPv6, Ether
 from dns_cache import DnsCache, is_dns
 from step2_flows import FlowManager
 from step3_sni import parse_client_hello, parse_http_host
 from step4_reassembly import Reassembler, MAX_BUFFER
 from classifier import classify
+from quic import QuicSni
 
 
 class TrafficAnalyzer:
@@ -49,6 +50,9 @@ class TrafficAnalyzer:
             if n:
                 flow.dns_name = n
                 flow.dns_app = classify(n)
+        if UDP in pkt:
+            self._quic(flow, pkt)
+            return flow
         if TCP not in pkt:
             return flow
 
@@ -57,6 +61,11 @@ class TrafficAnalyzer:
         if (ip.src, tcp.sport) != (flow.client_ip, flow.client_port):
             return flow                       # client -> server only
         payload = bytes(tcp.payload)
+        flags = int(tcp.flags)
+        if not flags & 0x04:                  # ignore RSTs (incl. our own)
+            if Ether in pkt:
+                flow.l2_src, flow.l2_dst = pkt[Ether].src, pkt[Ether].dst
+            flow.next_seq = (tcp.seq + len(payload) + (flags & 0x01) + ((flags >> 1) & 1)) % 2**32
         if not payload:
             return flow
 
@@ -83,3 +92,21 @@ class TrafficAnalyzer:
         elif r.size > MAX_BUFFER:
             r.done = True
         return flow
+
+    def _quic(self, flow, pkt):
+        """Name QUIC (UDP/443) flows from the client Initial packet's ClientHello."""
+        ip = pkt[IP] if IP in pkt else pkt[IPv6]
+        udp = pkt[UDP]
+        if flow.sni or udp.dport != 443 or (ip.src, udp.sport) != (flow.client_ip, flow.client_port):
+            return
+        st = self.states.setdefault(id(flow), QuicSni())
+        if st.done:
+            return
+        status, sni = st.add(bytes(udp.payload))
+        if status == "ok":
+            st.done = True
+            if sni:
+                flow.sni = sni
+                flow.app = classify(sni)
+        elif st.tries >= 8:
+            st.done = True

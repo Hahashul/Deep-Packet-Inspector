@@ -32,6 +32,11 @@ class Flow:
     fin_client: bool = False
     fin_server: bool = False
     closed_at: float = 0.0
+    next_seq: int = 0       # client's next TCP sequence number (for RST injection)
+    rst_sent: int = 0
+    rst_seq: int = -1
+    l2_src: str = ""        # our MAC / next-hop MAC, copied from a client packet
+    l2_dst: str = ""
 
     
     def update(self, ts, size, from_client):

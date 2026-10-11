@@ -8,8 +8,10 @@ Live dashboard over WebSocket.
 - Live packet capture (Scapy + BPF filter), producer/consumer queue
 - Flow tracking by 5-tuple, upload/download counted separately
 - SNI extraction with TCP reassembly for split ClientHellos
+- QUIC/HTTP3 naming: decrypts the client Initial packet (keys are public per RFC 9001) and reads its ClientHello, incl. ClientHellos split across packets
 - Domain-to-app classifier (YouTube, Google, GitHub, ads/trackers, ...)
-- Flag rules by domain, IP or app, editable live
+- Flag or block by domain, IP or app, editable live
+- Domain-aware blocking: connections whose SNI/Host matches a domain or app block rule are reset with an injected TCP RST (QUIC: UDP/443 to that IP is blocked so browsers fall back to TCP) (no IP blocking, so no collateral damage on shared CDNs). IP rules use the Windows firewall
 - FastAPI REST + WebSocket, single-page dashboard
 
 ## Setup (Windows)
@@ -28,60 +30,29 @@ Live dashboard over WebSocket.
 
 Offline demos: `python step5_apps.py your.pcap`
 
+## Validation
+Domain extraction is cross-checked against Wireshark/tshark (an independent TLS/HTTP
+dissector) with `validate_sni.py`, matching flows by 5-tuple.
+
+| Metric (TCP, 192 flows, one browsing capture) | Result |
+|---|---|
+| Recall (flows tshark named that we also named) | 100.0% |
+| Precision (names that match tshark's) | 100.0% |
+| Byte-weighted agreement | 100.0% |
+| TCP bytes tshark can name | 98.4% |
+
+| QUIC flows named (18 flows): recall / precision | 100.0% / 100.0% |
+
+QUIC is ~9% of flows in this capture (18 of 210).
+Run it yourself: `python validate_sni.py your.pcap --csv report.csv`
+
 ## Known limitations
-- QUIC/HTTP3 (UDP) and Encrypted Client Hello are not classified
+- Encrypted Client Hello is not classified
+- QUIC flows are named from the handshake only: their byte counts cover Initial packets, not the whole stream
 - Connections that started before capture began cannot be named
-- Data is in memory only (no persistence yet)
+- RST blocking races the real traffic and is TCP-only: QUIC is handled indirectly: a matching QUIC flow gets UDP/443 to that IP firewall-blocked, forcing the browser back to TCP where the RST applies
+- Firewall rules from a crashed run are not cleaned up on next start
 
 ## Legal
 Only capture traffic on networks and machines you own or have explicit
 permission to monitor.
-````
-
-## 3. Commit locally
-
-````powershell
-git init
-git add .
-git status
-````
-
-Check that the `git status` list contains your `.py` files, `static/index.html`, `README.md`, `requirements.txt`, and `.gitignore`, and does **not** contain `venv` or any `.pcap` files. Then:
-
-````powershell
-git config --global user.name "Your Name"
-git config --global user.email "you@example.com"
-git commit -m "Traffic analyzer MVP: capture, SNI/DPI, classifier, rules, dashboard"
-git branch -M main
-````
-
-Use the email tied to your GitHub account. If you don't want your real email public, GitHub has a private `noreply` address under Settings → Emails.
-
-## 4. Create the repo on GitHub
-
-1. Go to github.com/new.
-2. Name it `traffic-analyzer`, choose Public or Private, and **leave "Add a README" and "Add .gitignore" unticked**, since you already have both.
-3. Click **Create repository**. GitHub shows a URL like `https://github.com/<you>/traffic-analyzer.git`.
-
-## 5. Push
-
-````powershell
-git remote add origin https://github.com/<you>/traffic-analyzer.git
-git push -u origin main
-````
-
-A browser window should open asking you to sign in to GitHub. Approve it, and the push completes. Refresh the repo page and your files should be there.
-
-## Later changes
-
-After any edit, this is the whole routine:
-
-````powershell
-git add .
-git commit -m "describe what you changed"
-git push
-````
-
-A note on the code: the files are named `step1_...` to `step9`, which reflects how we built it. That's fine for now. If you want it to look cleaner for a portfolio, we can later group the core modules into a package and keep the steps as `examples/`.
-
-Tell me if `git status` shows anything unexpected, or if the push errors, and paste the message. Then we can pick up the Wireshark validation.

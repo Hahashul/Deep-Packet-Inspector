@@ -10,8 +10,8 @@ independently of this project). Flows are matched by their 5-tuple.
 
 Reported separately:
   * TCP flows      -> the in-scope accuracy numbers (precision / recall)
-  * QUIC (UDP) flows -> tshark can name these (it decrypts QUIC Initial packets);
-                       this analyzer cannot, by design. Counted, not scored.
+  * QUIC (UDP) flows -> scored separately; tshark decrypts QUIC Initial packets and
+                       so does this analyzer (quic.py).
 """
 import argparse
 import csv
@@ -177,10 +177,20 @@ def main():
           f"traffic is correctly named by the analyzer")
     print(f"TCP traffic tshark can name    : {pct(truth_bytes, tcp_bytes)} of all TCP bytes\n")
 
-    print("=== QUIC / UDP (out of scope, not scored) ===")
-    udp_bytes = sum(sizes.get(k, 0) for k in t_udp)
+    o_udp = {k: n for k, n in ours.items() if k[0] == "UDP"}
+    q_ok = [k for k, n in t_udp.items() if o_udp.get(k) == n]
+    q_wrong = [(k, n, o_udp[k]) for k, n in t_udp.items() if k in o_udp and o_udp[k] != n]
+    q_miss = [(k, n, "") for k, n in t_udp.items() if k not in o_udp]
+    q_extra = [(k, "", n) for k, n in o_udp.items() if k not in t_udp]
+    print("=== QUIC / UDP ===")
     print(f"flows tshark names via QUIC    : {len(t_udp)}")
-    print(f"bytes in those flows           : {udp_bytes}")
+    print(f"flows named by analyzer        : {len(o_udp)}")
+    print(f"  identical name               : {len(q_ok)}")
+    print(f"  different name               : {len(q_wrong)}")
+    print(f"  missed (tshark only)         : {len(q_miss)}")
+    print(f"  extra  (analyzer only)       : {len(q_extra)}")
+    print(f"RECALL    (found / tshark found) : {pct(len(q_ok), len(t_udp))}")
+    print(f"PRECISION (correct / we named)   : {pct(len(q_ok), len(o_udp))}")
     if t_udp:
         top = Counter(t_udp.values()).most_common(5)
         print("top QUIC names                 : " + ", ".join(f"{n} ({c})" for n, c in top))
@@ -196,6 +206,8 @@ def main():
             print(f"  {c} <-> {s}\n     tshark={t or '-'}  analyzer={o or '-'}")
         print()
 
+    show("QUIC DIFFERENT NAME", q_wrong)
+    show("QUIC MISSED by analyzer", q_miss)
     show("DIFFERENT NAME", wrong)
     show("MISSED by analyzer", missed)
     show("EXTRA (analyzer only)", extra)

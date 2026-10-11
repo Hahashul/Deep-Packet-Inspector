@@ -27,6 +27,8 @@ class Flow:
     app: str = "Unknown"
     flagged: bool = False
     matched_rule: str = ""
+    dns_name: str = ""      # fallback name learned from DNS (weaker than SNI)
+    dns_app: str = ""
     fin_client: bool = False
     fin_server: bool = False
     closed_at: float = 0.0

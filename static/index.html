@@ -148,7 +148,8 @@ function render({stats, flows}) {
   const shown = want ? flows.filter(f => f.app === want) : flows;
   $("rows").innerHTML = shown.slice(0, 40).map(f =>
     `<tr class="${f.flagged ? "flagged" : ""}"><td><span class="tag">${esc(f.app)}</span>${f.flagged ? `<span class="flag" title="${esc(f.matched_rule)}">FLAGGED</span>` : ""}</td>
-     <td title="${esc(f.name)}">${esc(f.name || "-")}</td>
+     <td title="${esc(f.name || f.dns_name)}">${f.name ? esc(f.name)
+        : f.dns_name ? `<span style="color:var(--dim)" title="guessed from DNS, not confirmed">${esc(f.dns_name)} <i>(DNS)</i></span>` : "-"}</td>
      <td>${esc(f.server)}</td>
      <td class="r">${fmt(f.bytes_sent)}</td><td class="r">${fmt(f.bytes_recv)}</td>
      <td class="r">${f.packets}</td></tr>`).join("");

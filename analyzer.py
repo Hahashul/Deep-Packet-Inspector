@@ -1,5 +1,6 @@
 from collections import defaultdict
 from scapy.all import TCP, IP, IPv6
+from dns_cache import DnsCache, is_dns
 from step2_flows import FlowManager
 from step3_sni import parse_client_hello, parse_http_host
 from step4_reassembly import Reassembler, MAX_BUFFER
@@ -10,6 +11,7 @@ class TrafficAnalyzer:
     def __init__(self, expire=False):
         self.fm = FlowManager(expire=expire)
         self.states = {}      # id(flow) -> Reassembler
+        self.dns = DnsCache()
         # running totals for flows that have already expired
         self.retired_flows = 0
         self.retired_bytes = 0
@@ -36,8 +38,18 @@ class TrafficAnalyzer:
         return done
 
     def process(self, pkt):
+        if is_dns(pkt):                       # learn from DNS; it is not a "flow" to show
+            self.dns.learn(pkt)
+            return None
         flow = self.fm.process(pkt)
-        if flow is None or TCP not in pkt:
+        if flow is None:
+            return flow
+        if not flow.dns_name:                 # fallback name from earlier DNS answers
+            n = self.dns.lookup(flow.server_ip)
+            if n:
+                flow.dns_name = n
+                flow.dns_app = classify(n)
+        if TCP not in pkt:
             return flow
 
         ip = pkt[IP] if IP in pkt else pkt[IPv6]

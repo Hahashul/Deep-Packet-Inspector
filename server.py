@@ -17,7 +17,7 @@ from step6_live import pick_iface
 
 from enforce import block_ip, unblock_ip
 
-BPF = "tcp port 80 or tcp port 443"
+BPF = "tcp port 80 or tcp port 443 or port 53"   # port 53 = DNS (UDP+TCP) for the name fallback
 
 an = TrafficAnalyzer(expire=True)
 rules = RuleEngine()
@@ -112,6 +112,7 @@ def flow_dict(f):
         "server": f"{f.server_ip}:{f.server_port}",
         "protocol": f.protocol,
         "name": f.sni or f.http_host or "",
+        "dns_name": f.dns_name,
         "app": f.app,
         "bytes_sent": f.bytes_sent,
         "bytes_recv": f.bytes_recv,

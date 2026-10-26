@@ -5,3 +5,4 @@ __pycache__/
 *.pcapng
 .vscode/
 *.db
+.env

@@ -284,6 +284,10 @@
 <div id="toast" role="status" aria-live="polite"></div>
 
 <script>
+const API_TOKEN = "__API_TOKEN__";
+const _fetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => _fetch(url, {...opts, headers: {...(opts.headers || {}), "X-API-Token": API_TOKEN}});
+
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function fmt(n) {
@@ -337,7 +341,7 @@ loadRules();
 
 /* ---------- connection ---------- */
 function connect() {
-  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws?token=" + encodeURIComponent(API_TOKEN));
   ws.onopen = () => setCapture(capturing !== false);
   ws.onclose = () => { $("live").classList.remove("on"); $("status").textContent = "Reconnecting"; $("cap-btn").hidden = true; pop(false); setTimeout(connect, 2000); };
   ws.onmessage = e => render(JSON.parse(e.data));

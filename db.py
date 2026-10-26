@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS rules (
 CREATE TABLE IF NOT EXISTS alerts (
   alert_id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id INTEGER, flow_id TEXT, rule TEXT, timestamp REAL);
+CREATE INDEX IF NOT EXISTS idx_flows_session ON flows(session_id);
+CREATE INDEX IF NOT EXISTS idx_flows_last_seen ON flows(last_seen);
+CREATE INDEX IF NOT EXISTS idx_alerts_time ON alerts(timestamp);
 """
 
 
@@ -32,7 +35,7 @@ def flow_row(session_id, f):
     return (session_id, flow_id(f), f.client_ip, f.client_port, f.server_ip,
             f.server_port, f.protocol, f.first_seen, f.last_seen,
             f.bytes_sent, f.bytes_recv, f.packets, f.sni, f.http_host,
-            f.app, "flagged" if f.flagged else "allowed")
+            f.app, getattr(f, "status_label", None) or ("flagged" if f.flagged else "allowed"))
 
 
 class Database:
@@ -99,6 +102,14 @@ class Database:
 
     def delete_rule(self, rule_id):
         self._run("DELETE FROM rules WHERE rule_id=?", (rule_id,))
+
+    # retention (KI-10): delete history older than N days, return rows removed
+    def purge_older_than(self, days):
+        cutoff = time.time() - days * 86400
+        n = self._run("DELETE FROM flows WHERE last_seen < ?", (cutoff,)).rowcount
+        self._run("DELETE FROM alerts WHERE timestamp < ?", (cutoff,))
+        self._run("DELETE FROM sessions WHERE COALESCE(end_time, start_time) < ?", (cutoff,))
+        return n
 
     # alerts
     def add_alert(self, sid, fid, rule):

@@ -1,12 +1,15 @@
 import asyncio
+import atexit
+import hmac
 import os
+import secrets
 import queue
 import threading
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from scapy.all import AsyncSniffer
 
@@ -24,6 +27,7 @@ import traceback
 QUIC_INITIAL = "(udp port 443 and ((ip and udp[8] & 0xe0 = 0xc0) or (ip6 and ip6[48] & 0xe0 = 0xc0)))"
 BPF = "tcp port 80 or tcp port 443 or port 53 or " + QUIC_INITIAL   # port 53 = DNS (UDP+TCP) for the name fallback
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 an = TrafficAnalyzer(expire=True)
 rules = RuleEngine()
 db = Database()
@@ -41,6 +45,63 @@ ctl = threading.Lock()   # serialises start/stop requests
 # Set QUIC_SHIELD=0 to disable (e.g. if you rely on a VPN that runs over UDP/443).
 QUIC_SHIELD = os.environ.get("QUIC_SHIELD", "1") != "0"
 shield = [False]
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))   # KI-10
+
+# ---- KI-02: per-run API token + Origin allow-list ----
+# The dashboard page is the only place the token is handed out, and a foreign web page cannot
+# read it (no CORS headers are sent). Set API_TOKEN to pin a value, AUTH=0 to disable (tests only).
+AUTH = os.environ.get("AUTH", "1") != "0"
+API_TOKEN = os.environ.get("API_TOKEN") or secrets.token_urlsafe(24)
+EXTRA_ORIGINS = {o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()}
+
+
+# Host allow-list: stops DNS-rebinding (a hostile site re-pointing its name at 127.0.0.1)
+ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"} | {
+    h.strip().lower() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()}
+
+
+def host_ok(host):
+    name = (host or "").lower()
+    name = name.rsplit(":", 1)[0] if not name.endswith("]") and ":" in name else name
+    return name in ALLOWED_HOSTS
+
+
+def origin_ok(origin, host):
+    """No Origin (curl, scripts) is allowed; a browser Origin must be the server's own host."""
+    if not origin:
+        return True
+    return origin in EXTRA_ORIGINS or origin.split("://", 1)[-1] == host
+
+
+def token_ok(value):
+    return bool(value) and hmac.compare_digest(value, API_TOKEN)
+
+
+# ---- KI-03: firewall (netsh) calls run on their own thread, never on the packet worker ----
+fw_q = queue.Queue()
+fw_on = threading.Event()          # set once the worker thread is running
+
+
+def fw(fn, *args):
+    if fw_on.is_set():
+        fw_q.put((fn, args))       # normal run: off the packet thread
+    else:
+        fn(*args)                  # tests / before startup: run inline
+
+
+def fw_worker():
+    fw_on.set()
+    while True:
+        item = fw_q.get()
+        if item is None:
+            return
+        fn, args = item
+        try:
+            fn(*args)
+        except Exception:
+            traceback.print_exc()
+        finally:
+            fw_q.task_done()
 
 
 def enqueue(pkt):
@@ -58,6 +119,7 @@ def recheck_all():
             db.add_alert(session_id, flow_id(f), f.matched_rule)
         if now:
             enforce_if_block(f)
+        f.status_label = ("blocked" if matched_action(f) == "block" else "flagged") if now else "allowed"
     sync_blocks()
     sync_shield()
 
@@ -67,10 +129,11 @@ def sync_shield():
     need = QUIC_SHIELD and any(r["action"] == "block" and r["type"] in ("domain", "app")
                               for r in rules.list())
     if shield[0] and not need:
-        unblock_udp443_all()
+        fw(unblock_udp443_all)
         shield[0] = False
     elif need and not shield[0] and capturing:
-        shield[0] = bool(block_udp443_all())
+        fw(block_udp443_all)
+        shield[0] = True
 
 
 def block_rule(flow):
@@ -89,11 +152,11 @@ def enforce_if_block(flow):
         return
     if r["type"] == "ip":
         if flow.server_ip not in blocked:
-            block_ip(flow.server_ip)
+            fw(block_ip, flow.server_ip)
             blocked[flow.server_ip] = flow.matched_rule
     elif flow.protocol == "UDP":
         if flow.server_port == 443 and "udp:" + flow.server_ip not in blocked:
-            block_udp443(flow.server_ip)                      # force fallback to TCP
+            fw(block_udp443, flow.server_ip)                  # force fallback to TCP
             blocked["udp:" + flow.server_ip] = flow.matched_rule
     else:
         reset.reset_flow(flow)
@@ -105,9 +168,9 @@ def sync_blocks():
     for key, hit in list(blocked.items()):
         if hit not in live:
             if key.startswith("udp:"):
-                unblock_udp443(key[4:])
+                fw(unblock_udp443, key[4:])
             else:
-                unblock_ip(key)
+                fw(unblock_ip, key)
             del blocked[key]
 
 
@@ -125,6 +188,7 @@ def worker():
                         db.add_alert(session_id, flow_id(flow), flow.matched_rule)
                     if flow.flagged:
                         enforce_if_block(flow)
+                        flow.status_label = "blocked" if matched_action(flow) == "block" else "flagged"
                 done = an.reap()
         except Exception:
             traceback.print_exc()             # never let one bad packet kill the worker
@@ -166,8 +230,15 @@ async def lifespan(app):
     iface = pick_iface(os.environ.get("IFACE"))
     for r in db.load_rules():
         rules.add(r["type"], r["value"], r["id"], r.get("action", "flag"))
+    threading.Thread(target=fw_worker, daemon=True).start()
     cleanup_stale()                       # drop firewall rules left by earlier runs
+    atexit.register(cleanup_stale)        # KI-04: also runs on Ctrl+C / console close / unhandled errors
+    if AUTH:
+        print(f"[security] dashboard token is generated per run; open http://127.0.0.1:8000/ to use it")
     reset.start(iface)
+    purged = db.purge_older_than(RETENTION_DAYS)
+    if purged:
+        print(f"[db] retention: removed {purged} flows older than {RETENTION_DAYS} days")
     session_id = db.start_session(str(iface), BPF)
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=saver, daemon=True).start()
@@ -177,16 +248,37 @@ async def lifespan(app):
     stop_sniffer()
     with lock:
         for key in list(blocked):
-            unblock_udp443(key[4:]) if key.startswith("udp:") else unblock_ip(key)
+            fw(unblock_udp443, key[4:]) if key.startswith("udp:") else fw(unblock_ip, key)
         blocked.clear()
         if shield[0]:
-            unblock_udp443_all()
+            fw(unblock_udp443_all)
             shield[0] = False
+    fw_q.join()
     save_now()
     db.end_session(session_id)
 
 
 app = FastAPI(title="Traffic Analyzer", lifespan=lifespan)
+
+PUBLIC_PATHS = {"/", "/health"}
+
+
+@app.middleware("http")
+async def guard(request, call_next):
+    """KI-02: every API call needs the per-run token and, if a browser sent an Origin, the right one."""
+    if AUTH and not host_ok(request.headers.get("host")):
+        return JSONResponse({"detail": "host not allowed"}, status_code=403)
+    if AUTH and request.url.path not in PUBLIC_PATHS and not request.url.path.startswith("/ws"):
+        if not origin_ok(request.headers.get("origin"), request.headers.get("host")):
+            return JSONResponse({"detail": "origin not allowed"}, status_code=403)
+        if not token_ok(request.headers.get("x-api-token", "")):
+            return JSONResponse({"detail": "missing or invalid API token"}, status_code=401)
+    return await call_next(request)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "capturing": capturing}
 
 
 def matched_action(f):
@@ -281,6 +373,11 @@ def get_stats():
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
+    if AUTH and (not host_ok(websocket.headers.get("host"))
+                 or not origin_ok(websocket.headers.get("origin"), websocket.headers.get("host"))
+                 or not token_ok(websocket.query_params.get("token", ""))):
+        await websocket.close(code=1008)          # policy violation
+        return
     await websocket.accept()
     try:
         while True:
@@ -341,7 +438,10 @@ def get_alerts(limit: int = 100):
 
 @app.get("/")
 def index():
-    return FileResponse("static/index.html")
+    with open(os.path.join(BASE_DIR, "static", "index.html"), encoding="utf-8") as fh:
+        page = fh.read()
+    # the page, and only the page, learns the token (a foreign site cannot read this response)
+    return HTMLResponse(page.replace("__API_TOKEN__", API_TOKEN if AUTH else ""))
 
 
 def capture_state():

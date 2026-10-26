@@ -2,7 +2,7 @@
 
 Shows which **domains and apps** a network is using, live, **without decrypting any traffic**.
 It reads what is sent in the clear: the TLS ClientHello (SNI), HTTP `Host` headers, the QUIC
-Initial packet, and DNS answers. Rules can flag or **block** by domain, app or IP.
+Initial packet, and DNS answers. Rules can flag or **block** by domain, app or IP; when rules overlap, block wins.
 
 > Domain extraction matches Wireshark on **192/192 TCP flows and 18/18 QUIC flows**
 > (100% precision and recall). See [Validation](#validation).
@@ -55,8 +55,9 @@ TCP sockets.
    ```
 3. Run from an **Administrator** terminal (needed for capture, packet injection and firewall rules):
    ```powershell
-   uvicorn server:app --port 8000
+   .\run.ps1          # creates the venv, installs requirements, starts on 127.0.0.1:8000
    ```
+   or manually: `uvicorn server:app --host 127.0.0.1 --port 8000`
    If the wrong network interface is picked, set it first: `$env:IFACE="Wi-Fi"`
 4. Open http://127.0.0.1:8000
 
@@ -81,6 +82,31 @@ are only reset if they send more data.
 | `GET /resets` | Number of RSTs injected |
 | `GET /sessions`, `/sessions/{id}/flows`, `/alerts` | History from SQLite |
 
+## Security
+All API endpoints and the WebSocket need a **per-run token**; the dashboard page receives it
+automatically. Requests with a foreign `Origin` or a `Host` other than localhost are rejected
+(CSRF and DNS-rebinding protection). Rule values are validated, and the server listens on
+localhost only. Pin a token for scripts with `API_TOKEN`:
+```powershell
+$env:API_TOKEN="my-secret"; .\run.ps1
+curl.exe -H "X-API-Token: my-secret" http://127.0.0.1:8000/alerts
+```
+| Variable | Default | Meaning |
+|---|---|---|
+| `IFACE` | auto | Interface to capture on |
+| `QUIC_SHIELD` | `1` | `0` disables the all-UDP/443 block (VPN over UDP/443) |
+| `API_TOKEN` | random per run | Fixed token for scripts |
+| `AUTH` | `1` | `0` disables authentication (tests only) |
+| `ALLOWED_HOSTS` / `ALLOWED_ORIGINS` | none | Extra accepted Host / Origin values |
+| `RETENTION_DAYS` | `30` | History older than this is deleted at startup |
+
+## Docker (Linux, monitoring only)
+```bash
+docker build -t traffic-analyzer .
+docker run --rm --net=host --cap-add=NET_RAW --cap-add=NET_ADMIN -e IFACE=eth0 traffic-analyzer
+```
+Firewall and RST enforcement need Windows; in the container they report as unavailable.
+
 ## Validation
 Name extraction is cross-checked against Wireshark's tshark, an independent dissector, with
 `validate_sni.py`, matching flows by 5-tuple.
@@ -98,12 +124,10 @@ python validate_sni.py your.pcap --csv report.csv
 
 ## Tests
 ```powershell
-python test_blocking.py     # block bookkeeping and RST/QUIC enforcement logic (mocked)
-python test_quic.py         # RFC 9001 key vectors and QUIC Initial parsing
-python test_classifier.py
+python run_tests.py         # runs every suite: classifier, QUIC, blocking, capture, security, robustness
 ```
-`test_dns.py` and `test_expiry.py` take a pcap: `python test_dns.py your.pcap`.
-Offline demos of each build stage: `python step5_apps.py your.pcap`.
+GitHub Actions runs the same command on every push. `test_dns.py` and `test_expiry.py` take a
+pcap: `python test_dns.py your.pcap`. Offline demos of each build stage: `python step5_apps.py your.pcap`.
 
 ## Project layout
 | File | Role |
@@ -114,10 +138,12 @@ Offline demos of each build stage: `python step5_apps.py your.pcap`.
 | `quic.py` | QUIC Initial decryption and ClientHello extraction |
 | `dns_cache.py`, `classifier.py` | DNS name fallback, domain-to-app map |
 | `rules.py`, `enforce.py`, `reset.py` | Rule engine, firewall blocks, TCP RST injection |
-| `db.py`, `static/index.html` | SQLite persistence, dashboard |
+| `db.py`, `static/index.html` | SQLite persistence (indexes, retention), dashboard |
+| `run.ps1`, `Dockerfile`, `run_tests.py` | Windows launcher, Linux image, one-command test runner |
 | `validate_sni.py` | Accuracy check against Wireshark |
 
 ## Known limitations
+- Throughput is about 3,700 to 5,000 packets/s per core (Scapy dissection); drops are counted in the dashboard
 - Encrypted Client Hello (ECH) hides the SNI and cannot be classified
 - Connections that started before capture began cannot be named
 - RST blocking races the real traffic: the ClientHello has already left, so a connection can

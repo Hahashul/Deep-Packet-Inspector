@@ -4,7 +4,11 @@ PREFIX = "TrafficAnalyzer-Block-"
 
 
 def _run(cmd):
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:          # not Windows (e.g. Docker/Linux): enforcement is unavailable
+        print(f"[enforce] {cmd[0]} not found; firewall enforcement disabled on this OS")
+        return False
     if p.returncode != 0:
         print(f"[enforce] failed ({p.returncode}): {' '.join(cmd[:6])} -> "
               f"{(p.stdout or p.stderr).strip()[:200]}")
@@ -48,6 +52,9 @@ def unblock_udp443_all():
 
 def cleanup_stale():
     """Remove every firewall rule this app ever created (e.g. left by a crash or an old version)."""
-    subprocess.run(["powershell", "-NoProfile", "-Command",
-                    f"Remove-NetFirewallRule -DisplayName '{PREFIX}*' -ErrorAction SilentlyContinue"],
-                   capture_output=True, text=True)
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-Command",
+                        f"Remove-NetFirewallRule -DisplayName '{PREFIX}*' -ErrorAction SilentlyContinue"],
+                       capture_output=True, text=True)
+    except FileNotFoundError:
+        pass

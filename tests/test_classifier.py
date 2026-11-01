@@ -1,5 +1,5 @@
-"""Run with:  python test_classifier.py   (or: pytest test_classifier.py)"""
-from classifier import classify
+"""Run with:  python -m tests.test_classifier"""
+from trafficanalyzer.classifier import classify
 
 CASES = {
     # (input) -> expected app

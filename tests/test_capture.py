@@ -1,7 +1,7 @@
 """Start/stop capture logic, with the sniffer, firewall and RST sender mocked."""
-import server
-from db import Database
-from step2_flows import Flow
+from trafficanalyzer import server
+from trafficanalyzer.db import Database
+from trafficanalyzer.flows import Flow
 
 
 class FakeSniffer:
@@ -80,7 +80,7 @@ def test_all():
 
 def test_midstream():
     from scapy.all import IP, TCP
-    from step2_flows import FlowManager
+    from trafficanalyzer.flows import FlowManager
     fm = FlowManager()
     syn = IP(src="10.0.0.2", dst="1.2.3.4") / TCP(sport=5000, dport=443, flags="S")
     ack = IP(src="10.0.0.2", dst="1.2.3.4") / TCP(sport=5001, dport=443, flags="A")

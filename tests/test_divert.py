@@ -2,9 +2,9 @@
 import os
 from types import SimpleNamespace
 from unittest import mock
-import server
-from divert import Blocker
-from test_quic import _hello, _build_initial, _crypto
+from trafficanalyzer import server
+from trafficanalyzer.divert import Blocker
+from tests.test_quic import _hello, _build_initial, _crypto
 
 IP = "142.250.1.1"
 
@@ -39,7 +39,7 @@ def make(rules_blocked=("youtube.com",)):
 
 def test_tcp_domain_blocked_then_rest_of_flow_dropped_with_rst():
     b, _, hits, rsts = make()
-    with mock.patch("divert.make_rst", lambda p: "RST"):
+    with mock.patch("trafficanalyzer.divert.make_rst", lambda p: "RST"):
         assert b.process(tcp(syn=True, ack=False, seq=99)) is True      # handshake passes
         assert b.process(tcp(tls_record("www.youtube.com"))) is False    # hello never leaves
         assert b.process(tcp(b"more", seq=500)) is False                 # rest of flow dropped

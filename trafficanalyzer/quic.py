@@ -12,7 +12,7 @@ import hmac
 import hashlib
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from step3_sni import parse_client_hello
+from .sni import parse_client_hello
 
 V1, V2 = 0x00000001, 0x6B3343CF
 SALTS = {

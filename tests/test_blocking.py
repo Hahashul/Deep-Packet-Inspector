@@ -1,7 +1,7 @@
 """Block bookkeeping: rule-owned blocks are removed when the rule is deleted."""
 from types import SimpleNamespace
 from unittest import mock
-import server
+from trafficanalyzer import server
 server.capturing = True      # enforcement only runs while capture is on
 
 
@@ -36,8 +36,8 @@ def _pkt(sport, dport, flags, seq, payload=b"", src="10.0.0.2", dst="9.9.9.9"):
 
 
 def test_domain_block_sends_rst_at_next_seq():
-    import reset
-    from analyzer import TrafficAnalyzer
+    from trafficanalyzer import reset
+    from trafficanalyzer.analyzer import TrafficAnalyzer
     server.blocked.clear()
     server.rules.rules.clear()
     server.rules.add("domain", "example.com", action="block")

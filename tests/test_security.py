@@ -6,8 +6,8 @@ import tempfile
 from types import SimpleNamespace
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
-import server
-from rules import RuleEngine
+from trafficanalyzer import server
+from trafficanalyzer.rules import RuleEngine
 
 H = {"X-API-Token": "test-token"}
 c = TestClient(server.app)          # no lifespan: no capture, no firewall

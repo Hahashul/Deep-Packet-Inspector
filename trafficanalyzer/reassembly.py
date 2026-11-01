@@ -1,7 +1,7 @@
 import sys
 from scapy.all import rdpcap, TCP, IP, IPv6
-from step2_flows import FlowManager, fmt_bytes
-from step3_sni import parse_client_hello, parse_http_host
+from .flows import FlowManager, fmt_bytes
+from .sni import parse_client_hello, parse_http_host
 
 MAX_BUFFER = 32 * 1024
 

@@ -12,4 +12,4 @@ if (-not (Test-Path dashboard\out\index.html)) {      # dashboard is a static ex
     } else { Write-Warning "dashboard\out is missing and Node.js is not installed; the page will say 'not built'." }
 }
 Write-Host "Starting on http://127.0.0.1:8000  (localhost only; token is generated per run)"
-uvicorn server:app --host 127.0.0.1 --port 8000
+uvicorn trafficanalyzer.server:app --host 127.0.0.1 --port 8000

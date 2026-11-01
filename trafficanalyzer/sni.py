@@ -1,6 +1,6 @@
 import sys
 from scapy.all import rdpcap, TCP
-from step2_flows import FlowManager, fmt_bytes
+from .flows import FlowManager, fmt_bytes
 
 HTTP_METHODS = (b"GET ", b"POST ", b"HEAD ", b"PUT ", b"DELETE ",
                 b"OPTIONS ", b"PATCH ", b"CONNECT ")

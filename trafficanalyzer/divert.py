@@ -12,9 +12,9 @@ import threading
 import time
 import traceback
 
-from step3_sni import parse_client_hello, parse_http_host
-from step4_reassembly import Reassembler, MAX_BUFFER
-from quic import QuicSni
+from .sni import parse_client_hello, parse_http_host
+from .reassembly import Reassembler, MAX_BUFFER
+from .quic import QuicSni
 
 FILTER = "outbound and !loopback and (tcp.DstPort == 443 or tcp.DstPort == 80 or udp.DstPort == 443)"
 PENDING, ALLOW, BLOCK = 0, 1, 2

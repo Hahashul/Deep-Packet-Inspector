@@ -1,9 +1,10 @@
-"""Robustness tests: malformed input must never raise. Deterministic (fixed seed). Run: python test_robustness.py"""
+"""Robustness tests: malformed input must never raise. Deterministic (fixed seed). Run: python -m tests.test_robustness"""
 import inspect, os, random
 from scapy.all import IP, TCP, UDP, Raw
-import quic, test_quic
-from analyzer import TrafficAnalyzer
-from step3_sni import parse_client_hello, parse_http_host
+from trafficanalyzer import quic
+from tests import test_quic
+from trafficanalyzer.analyzer import TrafficAnalyzer
+from trafficanalyzer.sni import parse_client_hello, parse_http_host
 
 HELLO = b"\x16\x03\x01\x00\x00" + test_quic._hello("www.youtube.com", pad=100)
 

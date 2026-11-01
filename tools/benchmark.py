@@ -1,8 +1,9 @@
-"""Throughput benchmark: Scapy dissection + analyzer, as in live sniffing. Run: python benchmark.py"""
+"""Throughput benchmark: Scapy dissection + analyzer, as in live sniffing. Run: python -m tools.benchmark"""
 import os, time, tracemalloc
 from scapy.all import Ether, IP, TCP, Raw
-import quic, test_quic
-from analyzer import TrafficAnalyzer
+from trafficanalyzer import quic
+from tests import test_quic
+from trafficanalyzer.analyzer import TrafficAnalyzer
 
 HOSTS = ["www.youtube.com", "i.ytimg.com", "github.com", "www.google.com", "api.openai.com", "cdn.example.net"]
 

@@ -2,7 +2,7 @@
 import os
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import quic
+from trafficanalyzer import quic
 
 
 def test_rfc9001_key_vectors():          # RFC 9001 Appendix A.1

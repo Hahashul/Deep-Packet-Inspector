@@ -1,15 +1,15 @@
 """Replay a pcap with expiry off vs on; byte totals must match exactly."""
 import sys
 from scapy.all import PcapReader
-import step2_flows
-from analyzer import TrafficAnalyzer
+from trafficanalyzer import flows
+from trafficanalyzer.analyzer import TrafficAnalyzer
 
 
 def run(path, tcp_idle=None, udp_idle=None, grace=None, sweep=None):
-    if tcp_idle is not None: step2_flows.TCP_IDLE_TIMEOUT = tcp_idle
-    if udp_idle is not None: step2_flows.UDP_IDLE_TIMEOUT = udp_idle
-    if grace is not None:    step2_flows.CLOSED_GRACE = grace
-    if sweep is not None:    step2_flows.SWEEP_INTERVAL = sweep
+    if tcp_idle is not None: flows.TCP_IDLE_TIMEOUT = tcp_idle
+    if udp_idle is not None: flows.UDP_IDLE_TIMEOUT = udp_idle
+    if grace is not None:    flows.CLOSED_GRACE = grace
+    if sweep is not None:    flows.SWEEP_INTERVAL = sweep
 
     a = TrafficAnalyzer()
     b = TrafficAnalyzer(expire=True)

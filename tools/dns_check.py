@@ -1,13 +1,13 @@
 """How much does the DNS fallback help, and how reliable is it?
 
-    python test_dns.py big.pcap
+    python -m tools.dns_check big.pcap
 
 Reliability check: for flows where BOTH an SNI/Host and a DNS name exist,
 how often do they agree? (SNI is the ground truth here.)
 """
 import sys
 from scapy.all import PcapReader
-from analyzer import TrafficAnalyzer
+from trafficanalyzer.analyzer import TrafficAnalyzer
 
 
 def parent(name):                      # rough "registrable domain": last two labels

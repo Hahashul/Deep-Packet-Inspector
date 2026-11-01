@@ -1,9 +1,9 @@
 """
 Cross-validate the analyzer's SNI / HTTP Host extraction against Wireshark (tshark).
 
-    python validate_sni.py sample2.pcap
-    python validate_sni.py sample2.pcap --csv report.csv
-    python validate_sni.py sample2.pcap --tshark "C:\\Program Files\\Wireshark\\tshark.exe"
+    python -m tools.validate_sni sample2.pcap
+    python -m tools.validate_sni sample2.pcap --csv report.csv
+    python -m tools.validate_sni sample2.pcap --tshark "C:\\Program Files\\Wireshark\\tshark.exe"
 
 Ground truth = tshark's own dissection (it reassembles TCP and parses TLS/HTTP
 independently of this project). Flows are matched by their 5-tuple.
@@ -23,7 +23,7 @@ from collections import Counter
 
 from scapy.all import PcapReader
 
-from analyzer import TrafficAnalyzer
+from trafficanalyzer.analyzer import TrafficAnalyzer
 
 WIN_DEFAULT = r"C:\Program Files\Wireshark\tshark.exe"
 FIELDS = [

@@ -1,11 +1,11 @@
 from collections import defaultdict
 from scapy.all import TCP, UDP, IP, IPv6, Ether
-from dns_cache import DnsCache, is_dns
-from step2_flows import FlowManager
-from step3_sni import parse_client_hello, parse_http_host
-from step4_reassembly import Reassembler, MAX_BUFFER
-from classifier import classify
-from quic import QuicSni
+from .dns_cache import DnsCache, is_dns
+from .flows import FlowManager
+from .sni import parse_client_hello, parse_http_host
+from .reassembly import Reassembler, MAX_BUFFER
+from .classifier import classify
+from .quic import QuicSni
 
 
 class TrafficAnalyzer:

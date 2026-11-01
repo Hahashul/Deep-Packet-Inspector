@@ -15,24 +15,24 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from scapy.all import AsyncSniffer
 
-from analyzer import TrafficAnalyzer
-from db import Database, flow_id, flow_row
-from rules import RuleEngine
-from step6_live import pick_iface
+from .analyzer import TrafficAnalyzer
+from .db import Database, flow_id, flow_row
+from .rules import RuleEngine
+from .capture import pick_iface
 
-from enforce import (block_ip, unblock_ip, block_udp443, unblock_udp443,
+from .enforce import (block_ip, unblock_ip, block_udp443, unblock_udp443,
                      block_udp443_all, unblock_udp443_all, cleanup_stale)
-import reset
+from . import reset
 import traceback
 from types import SimpleNamespace
-from classifier import classify
-from divert import Blocker
+from .classifier import classify
+from .divert import Blocker
 
 # QUIC: only client/server *Initial* packets (long header, type bits 0b00/0b01) so video streams stay cheap
 QUIC_INITIAL = "(udp port 443 and ((ip and udp[8] & 0xe0 = 0xc0) or (ip6 and ip6[48] & 0xe0 = 0xc0)))"
 BPF = "tcp port 80 or tcp port 443 or port 53 or " + QUIC_INITIAL   # port 53 = DNS (UDP+TCP) for the name fallback
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root
 an = TrafficAnalyzer(expire=True)
 rules = RuleEngine()
 db = Database()

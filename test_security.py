@@ -80,9 +80,40 @@ def test_dashboard_served_from_any_cwd():                      # KI-08
     old = os.getcwd(); os.chdir(tempfile.gettempdir())
     try:
         r = c.get("/")
-        assert r.status_code == 200 and "test-token" in r.text
+        assert r.status_code == 200 and "test-token" not in r.text   # token is no longer in the page
     finally:
         os.chdir(old)
+
+
+def test_session_endpoint_gives_token_same_origin_only():      # replaces token-in-HTML
+    r = c.get("/api/session")
+    assert r.status_code == 200 and r.json()["token"] == "test-token"
+    assert r.headers["cache-control"] == "no-store"
+    assert c.get("/session", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert c.get("/session", headers={"Origin": "http://evil.example"}).status_code == 403
+    assert c.get("/session", headers={"Host": "evil.example"}).status_code == 403
+
+
+def test_api_prefix_and_new_endpoints_need_token():
+    for path in ["/api/rules", "/api/rules/status", "/api/events", "/api/stats"]:
+        assert c.get(path).status_code == 401, path
+        assert c.get(path, headers=H).status_code == 200, path
+
+
+def test_rules_page_is_not_blocked_by_rules_api_guard():
+    assert c.get("/rules/").status_code not in (401, 403)      # page URL (trailing slash)
+    assert c.get("/rules").status_code == 401                   # API URL still needs the token
+
+
+def test_browser_visit_to_rules_goes_to_page():
+    r = c.get("/rules", headers={"Accept": "text/html", "Sec-Fetch-Dest": "document"}, follow_redirects=False)
+    assert r.status_code in (301, 302, 307) and r.headers["location"].endswith("/rules/")
+    assert c.get("/rules", headers={"Accept": "*/*"}).status_code == 401      # API calls still need the token
+
+
+def test_stats_has_block_fields():
+    st = c.get("/api/stats", headers=H).json()
+    assert {"blocked_attempts", "armed", "has_block_rules"} <= set(st)
 
 
 def test_dns_rebinding_host_rejected():                        # KI-02 hardening

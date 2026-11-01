@@ -1,6 +1,6 @@
 """Run every automated test and print one summary line per file. Exit code 1 if any fail."""
 import subprocess, sys
-TESTS = ["test_classifier", "test_quic", "test_blocking", "test_capture", "test_security", "test_robustness"]
+TESTS = ["test_classifier", "test_quic", "test_blocking", "test_capture", "test_security", "test_robustness", "test_divert"]
 failed = []
 for t in TESTS:
     p = subprocess.run([sys.executable, f"{t}.py"], capture_output=True, text=True)

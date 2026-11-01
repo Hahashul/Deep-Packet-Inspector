@@ -5,11 +5,13 @@ import os
 import secrets
 import queue
 import threading
-from collections import defaultdict
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from scapy.all import AsyncSniffer
 
@@ -22,6 +24,9 @@ from enforce import (block_ip, unblock_ip, block_udp443, unblock_udp443,
                      block_udp443_all, unblock_udp443_all, cleanup_stale)
 import reset
 import traceback
+from types import SimpleNamespace
+from classifier import classify
+from divert import Blocker
 
 # QUIC: only client/server *Initial* packets (long header, type bits 0b00/0b01) so video streams stay cheap
 QUIC_INITIAL = "(udp port 443 and ((ip and udp[8] & 0xe0 = 0xc0) or (ip6 and ip6[48] & 0xe0 = 0xc0)))"
@@ -45,6 +50,12 @@ ctl = threading.Lock()   # serialises start/stop requests
 # Set QUIC_SHIELD=0 to disable (e.g. if you rely on a VPN that runs over UDP/443).
 QUIC_SHIELD = os.environ.get("QUIC_SHIELD", "1") != "0"
 shield = [False]
+# ---- dashboard feed: per-rule block counters + recent plain-language events ----
+block_hits = defaultdict(int)     # rule key ('type:value') -> connections blocked since start
+events = deque(maxlen=300)        # newest last; each has an increasing id
+_event_id = [0]
+LEAK_BYTES = 100_000              # a "blocked" flow that still moved this much afterwards = block is leaking
+DASH_DIR = os.path.join(BASE_DIR, "dashboard", "out")
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))   # KI-10
 
 # ---- KI-02: per-run API token + Origin allow-list ----
@@ -104,6 +115,23 @@ def fw_worker():
             fw_q.task_done()
 
 
+def divert_decide(name, ip):
+    """Block rule key for a flow seen by WinDivert ('' = allow). A block rule beats a flag rule."""
+    f = SimpleNamespace(sni=name, http_host="", app=classify(name) if name else "Unknown", server_ip=ip)
+    for key, action in rules.match_all(f):
+        if action == "block":
+            return key
+    return ""
+
+
+def divert_on_block(rule, name, ip):
+    record_block(SimpleNamespace(matched_rule=rule, sni=name, app=classify(name) if name else "",
+                                 server_ip=ip, total_bytes=0))
+
+
+blocker = Blocker(divert_decide, divert_on_block)    # inline packet dropping (WinDivert)
+
+
 def enqueue(pkt):
     try:
         q.put_nowait(pkt)
@@ -111,22 +139,47 @@ def enqueue(pkt):
         dropped[0] += 1
 
 
+def add_event(kind, name="", app="", rule=""):
+    _event_id[0] += 1
+    events.append({"id": _event_id[0], "ts": time.time(), "kind": kind,
+                   "name": name, "app": app, "rule": rule})
+
+
+def record_block(flow):
+    """Count one blocked connection (once per flow) and add it to the activity feed."""
+    if getattr(flow, "block_counted", False):
+        return
+    flow.block_counted = True
+    flow.blocked_at_bytes = getattr(flow, "total_bytes", 0)
+    block_hits[flow.matched_rule] += 1
+    add_event("blocked", getattr(flow, "sni", "") or getattr(flow, "http_host", "")
+              or getattr(flow, "dns_name", "") or getattr(flow, "server_ip", ""),
+              getattr(flow, "app", ""), flow.matched_rule)
+
+
+def note_alert(flow):
+    db.add_alert(session_id, flow_id(flow), flow.matched_rule)
+    if matched_action(flow) != "block":
+        add_event("flagged", flow.sni or flow.http_host or flow.server_ip, flow.app, flow.matched_rule)
+
+
 def recheck_all():
     for f in an.fm.flows.values():
         was = f.flagged
         now = rules.evaluate(f)
         if now and not was:
-            db.add_alert(session_id, flow_id(f), f.matched_rule)
+            note_alert(f)
         if now:
             enforce_if_block(f)
         f.status_label = ("blocked" if matched_action(f) == "block" else "flagged") if now else "allowed"
     sync_blocks()
     sync_shield()
+    blocker.reevaluate()
 
 
 def sync_shield():
     """Engage/release the QUIC shield. Releasing is always allowed; engaging only while capturing."""
-    need = QUIC_SHIELD and any(r["action"] == "block" and r["type"] in ("domain", "app")
+    need = QUIC_SHIELD and not blocker.active and any(r["action"] == "block" and r["type"] in ("domain", "app")
                               for r in rules.list())
     if shield[0] and not need:
         fw(unblock_udp443_all)
@@ -145,7 +198,7 @@ def block_rule(flow):
 def enforce_if_block(flow):
     """ip rules -> firewall; domain/app rules -> TCP RST on this connection.
     Paused while capture is stopped (existing firewall blocks stay in place)."""
-    if not capturing:
+    if not capturing or blocker.active:      # WinDivert already drops these flows inline
         return
     r = block_rule(flow)
     if not r:
@@ -154,12 +207,15 @@ def enforce_if_block(flow):
         if flow.server_ip not in blocked:
             fw(block_ip, flow.server_ip)
             blocked[flow.server_ip] = flow.matched_rule
+        record_block(flow)
     elif flow.protocol == "UDP":
         if flow.server_port == 443 and "udp:" + flow.server_ip not in blocked:
             fw(block_udp443, flow.server_ip)                  # force fallback to TCP
             blocked["udp:" + flow.server_ip] = flow.matched_rule
+        record_block(flow)
     else:
-        reset.reset_flow(flow)
+        if reset.reset_flow(flow):
+            record_block(flow)
 
 
 def sync_blocks():
@@ -185,7 +241,7 @@ def worker():
                 flow = an.process(pkt)
                 if flow is not None:
                     if not flow.flagged and rules.evaluate(flow):
-                        db.add_alert(session_id, flow_id(flow), flow.matched_rule)
+                        note_alert(flow)
                     if flow.flagged:
                         enforce_if_block(flow)
                         flow.status_label = "blocked" if matched_action(flow) == "block" else "flagged"
@@ -236,6 +292,11 @@ async def lifespan(app):
     if AUTH:
         print(f"[security] dashboard token is generated per run; open http://127.0.0.1:8000/ to use it")
     reset.start(iface)
+    if os.environ.get("WINDIVERT", "1") != "0":
+        if blocker.start():
+            print("[block] WinDivert active: blocked flows are dropped inline")
+        else:
+            print(f"[block] {blocker.error}; falling back to RST + firewall blocking")
     purged = db.purge_older_than(RETENTION_DAYS)
     if purged:
         print(f"[db] retention: removed {purged} flows older than {RETENTION_DAYS} days")
@@ -245,6 +306,7 @@ async def lifespan(app):
     start_sniffer()
     yield
     stop.set()
+    blocker.stop()
     stop_sniffer()
     with lock:
         for key in list(blocked):
@@ -260,20 +322,63 @@ async def lifespan(app):
 
 app = FastAPI(title="Traffic Analyzer", lifespan=lifespan)
 
-PUBLIC_PATHS = {"/", "/health"}
+API_ROOTS = {"flows", "stats", "rules", "sessions", "alerts", "capture", "resets", "blocked", "events"}
+
+
+def is_api(path):
+    """True for API routes. '/rules/' (trailing slash, nothing after) is the dashboard's Rules
+    *page*, which carries no data; the API route is '/rules' (the page calls it as /api/rules)."""
+    parts = path.split("/")
+    if len(parts) > 1 and parts[1] in API_ROOTS:
+        return not (len(parts) == 3 and parts[2] == "")
+    return False
 
 
 @app.middleware("http")
 async def guard(request, call_next):
-    """KI-02: every API call needs the per-run token and, if a browser sent an Origin, the right one."""
+    """KI-02: every API call needs the per-run token and, if a browser sent an Origin, the right one.
+    Static dashboard files carry no data, so they are public (the Host check still applies)."""
     if AUTH and not host_ok(request.headers.get("host")):
         return JSONResponse({"detail": "host not allowed"}, status_code=403)
-    if AUTH and request.url.path not in PUBLIC_PATHS and not request.url.path.startswith("/ws"):
+    h = request.headers
+    if (request.method == "GET" and request.url.path == "/rules"
+            and (h.get("sec-fetch-dest") == "document" or "text/html" in h.get("accept", ""))):
+        return RedirectResponse("/rules/")          # a browser visit means the Rules page, not the API
+    if AUTH and is_api(request.url.path):
         if not origin_ok(request.headers.get("origin"), request.headers.get("host")):
             return JSONResponse({"detail": "origin not allowed"}, status_code=403)
         if not token_ok(request.headers.get("x-api-token", "")):
             return JSONResponse({"detail": "missing or invalid API token"}, status_code=401)
     return await call_next(request)
+
+
+class ApiPrefix:
+    """Lets the dashboard call /api/<route>; the app itself still serves /<route>."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket") and scope["path"].startswith("/api/"):
+            scope = dict(scope)
+            scope["path"] = scope["path"][4:]
+            if scope.get("raw_path"):
+                scope["raw_path"] = scope["raw_path"][4:]
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(ApiPrefix)           # added last = outermost, so it runs before the guard
+
+
+@app.get("/session")
+def session(request: Request):
+    """Same-origin endpoint that hands the dashboard its per-run token. A foreign page cannot
+    read it: no CORS headers are sent, cross-site fetches are refused, Host/Origin are checked."""
+    h = request.headers
+    if AUTH and (h.get("sec-fetch-site", "same-origin") not in ("same-origin", "none")
+                 or not origin_ok(h.get("origin"), h.get("host"))):
+        return JSONResponse({"detail": "not allowed"}, status_code=403)
+    return JSONResponse({"token": API_TOKEN if AUTH else "", "auth": AUTH},
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/health")
@@ -351,6 +456,12 @@ def snapshot(limit=50, app_filter=None):
             "rst_sent": reset.sent,
             "firewall_blocks": len(blocked) + (1 if shield[0] else 0),
             "quic_shield": shield[0],
+            "blocked_attempts": sum(block_hits.values()),
+            "has_block_rules": any(r["action"] == "block" for r in rules.list()),
+            "armed": (blocker.active or capturing) and any(r["action"] == "block" for r in rules.list()),
+            "enforcement": "windivert" if blocker.active else "legacy",
+            "enforcement_error": blocker.error,
+            "dropped_packets": blocker.dropped,
             "apps": sorted(
                 ({"app": k, **v} for k, v in apps.items()),
                 key=lambda a: a["bytes"], reverse=True),
@@ -405,6 +516,7 @@ def add_rule(r: RuleIn):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     db.save_rule(rule)
+    add_event("rule_added", rule["value"], rule=f"{rule['type']}:{rule['value']}")
     with lock:
         recheck_all()
     return rule
@@ -415,9 +527,44 @@ def delete_rule(rule_id: int):
     if not rules.remove(rule_id):
         raise HTTPException(status_code=404, detail="no such rule")
     db.delete_rule(rule_id)
+    add_event("rule_removed", str(rule_id))
     with lock:
         recheck_all()
     return {"deleted": rule_id}
+
+
+@app.get("/events")
+def get_events(limit: int = 50, after: int = 0):
+    """Recent activity, newest first. after=<id> returns only newer events."""
+    items = [e for e in list(events) if e["id"] > after]
+    return items[::-1][:max(1, min(limit, 300))]
+
+
+@app.get("/rules/status")
+def rules_status():
+    """Every rule with how many connections it blocked and whether the block is working."""
+    with lock:
+        flows = list(an.fm.flows.values())
+    out = []
+    for r in rules.list():
+        key = f"{r['type']}:{r['value']}"
+        hits = block_hits.get(key, 0)
+        leaked = sum(max(0, f.total_bytes - getattr(f, "blocked_at_bytes", f.total_bytes))
+                     for f in flows if f.matched_rule == key and getattr(f, "block_counted", False))
+        matched = sum(1 for f in flows if f.matched_rule == key)
+        if r["action"] != "block":
+            status, why = "flagging", "Flag only: watched, never stopped"
+        elif not (blocker.active or capturing):
+            status, why = "inactive", "Blocking engine is not running, so this block is not enforced"
+        elif leaked > LEAK_BYTES:
+            status, why = "leaking", f"Traffic kept flowing after the block ({leaked // 1024} KB)"
+        elif hits:
+            status, why = "working", f"Stopped {hits} connection{'s' if hits != 1 else ''}"
+        else:
+            status, why = "waiting", "Armed. No matching traffic seen yet"
+        out.append({**r, "blocked_attempts": hits, "active_flows": matched,
+                    "leaked_bytes": leaked, "status": status, "detail": why})
+    return out
 
 
 # ---- history (from the database) ----
@@ -436,12 +583,16 @@ def get_alerts(limit: int = 100):
     return db.alerts(limit)
 
 
+NOT_BUILT = ("<h3>Dashboard not built</h3><p>Run <code>npm install &amp;&amp; npm run build</code> "
+             "inside <code>dashboard/</code>, then reload.</p>")
+
+
 @app.get("/")
 def index():
-    with open(os.path.join(BASE_DIR, "static", "index.html"), encoding="utf-8") as fh:
-        page = fh.read()
-    # the page, and only the page, learns the token (a foreign site cannot read this response)
-    return HTMLResponse(page.replace("__API_TOKEN__", API_TOKEN if AUTH else ""))
+    page = os.path.join(DASH_DIR, "index.html")
+    if os.path.exists(page):
+        return FileResponse(page)
+    return HTMLResponse(NOT_BUILT)
 
 
 def capture_state():
@@ -462,6 +613,7 @@ def capture_stop():
         if capturing:
             stop_sniffer()
             save_now()
+            add_event("capture_stopped")
         return capture_state()
 
 
@@ -491,6 +643,7 @@ def capture_start(fresh: bool = False):
             raise HTTPException(status_code=500, detail=f"cannot start capture: {e}")
         with lock:
             recheck_all()                 # apply rules that changed while stopped
+        add_event("capture_started")
         return capture_state()
 
 
@@ -502,3 +655,7 @@ def get_resets():
 @app.get("/blocked")
 def get_blocked():
     return blocked
+
+
+# must stay last: serves the exported dashboard for every path no API route claimed
+app.mount("/", StaticFiles(directory=DASH_DIR, html=True, check_dir=False), name="dashboard")
